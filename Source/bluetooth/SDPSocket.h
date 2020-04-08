@@ -561,7 +561,7 @@ namespace Bluetooth {
                                 _status = DeserializeServiceAttributeResponse(parameters);
                                 break;
                             case PDU::ServiceSearchAttributeResponse:
-                                _status = PDU::Success;
+                                _status = DeserializeServicSearchAttributeResponse(parameters);
                                 break;
                             default:
                                 _status = PDU::DeserializationFailed;
@@ -613,13 +613,26 @@ namespace Bluetooth {
                 {
                     PDU::errorid result = PDU::DeserializationFailed;
 
-                    ASSERT(Type() == PDU::ServiceSearchResponse);
+                    ASSERT(Type() == PDU::ServiceAttributeResponse);
 
                     if (params.Length() >= 2) {
                         uint16_t byteCount = 0;
                         params.Pop(byteCount);
                         params.Pop([&](const PDU::Serializer& sequence) {
+                            // TODO
                         });
+                    }
+
+                    return (result);
+                }
+                PDU::errorid DeserializeServicSearchAttributeResponse(const PDU::Serializer& params)
+                {
+                    PDU::errorid result = PDU::DeserializationFailed;
+
+                    ASSERT(Type() == PDU::ServiceSearchAttributeResponse);
+
+                    if (params.Length() >= 2) {
+                        // TODO
                     }
 
                     return (result);
@@ -776,8 +789,83 @@ namespace Bluetooth {
         class Profile {
         public:
             enum serviceid {
-                AudioSource = 0x110a,
-                AudioSink = 0x110b
+		        ServiceDiscoveryServerServiceClassID = 0x1000,
+                BrowseGroupDescriptorServiceClassID = 0x1001,
+                PublicBrowseRoot = 0x1002,
+                SerialPort = 0x1101,
+                LANAccessUsingPPP = 0x1102,
+                DialupNetworking = 0x1103,
+                IrMCSync = 0x1104,
+                OBEXObjectPush = 0x1105,
+                OBEXFileTransfer = 0x1106,
+                IrMCSyncCommand = 0x1107,
+                HeadsetHSP = 0x1108,
+                CordlessTelephony = 0x1109,
+                AudioSource = 0x110A,
+                AudioSink = 0x110B,
+                AVRemoteControlTarget = 0x110C,
+                AdvancedAudioDistribution = 0x110D,
+                AVRemoteControl = 0x110E,
+                AVRemoteControlController = 0x110F,
+                Intercom = 0x1110,
+                Fax = 0x1111,
+                HeadsetAudioGateway = 0x1112,
+                WAP = 0x1113,
+                WAPClient = 0x1114,
+                PANU = 0x1115,
+                NAP = 0x1116,
+                GN = 0x1117,
+                DirectPrinting = 0x1118,
+                ReferencePrinting = 0x1119,
+                BasicImagingProfile = 0x111A,
+                ImagingResponder = 0x111B,
+                ImagingAutomaticArchive = 0x111C,
+                ImagingReferencedObjects = 0x111D,
+                Handsfree = 0x111E,
+                HandsfreeAudioGateway = 0x111F,
+                DirectPrintingReferenceObjectsService = 0x1120,
+                ReflectedUI = 0x1121,
+                BasicPrinting = 0x1122,
+                PrintingStatus = 0x1123,
+                HumanInterfaceDeviceService = 0x1124,
+                HardcopyCableReplacement = 0x1125,
+                HCRPrint = 0x1126,
+                HCRScan = 0x1127,
+                CommonISDNAccess = 0x1128,
+                SIMAccess = 0x112D,
+                PhonebookAccessPCE = 0x112E,
+                PhonebookAccessPSE = 0x112F,
+                PhonebookAccess = 0x1130,
+                HeadsetHS = 0x1131,
+                MessageAccessServer = 0x1132,
+                MessageNotificationServer = 0x1133,
+                MessageAccessProfile = 0x1134,
+                GNSS = 0x1135,
+                GNSSServer = 0x1136,
+                ThreeDDisplay = 0x1137,
+                ThreeDGlasses = 0x1138,
+                ThreeDSynchronisation = 0x1339,
+                MPSProfile = 0x113A,
+                MPSSC = 0x113B,
+                CTNAccessService = 0x113C,
+                CTNNotificationService = 0x113D,
+                CTNProfile= 0x113E,
+                PnPInformation = 0x1200,
+                GenericNetworking = 0x1201,
+                GenericFileTransfer = 0x1202,
+                GenericAudio = 0x1203,
+                GenericTelephony = 0x1204,
+                UPNPService = 0x1205,
+                UPNPIPService = 0x1206,
+                ESDPUPNPIPPAN = 0x1300,
+                ESDPUPNPIPLAP = 0x1301,
+                ESDPUPNPL2CAP = 0x1302,
+                VideoSource = 0x1303,
+                VideoSink = 0x1304,
+                VideoDistribution = 0x1305,
+                HDP = 0x1400,
+                HDPSource = 0x1401,
+                HDPSink = 0x1402
             };
 
         public:
@@ -838,6 +926,7 @@ namespace Bluetooth {
                 void Attribute(const uint16_t id, const string& data)
                 {
                     _attributes.emplace(id, data);
+                    // TODO
                 }
 
             private:
