@@ -4,19 +4,19 @@ namespace WPEFramework {
 
 namespace Bluetooth {
 
+    enum sizetype {
+        SIZE_8 = 0,
+        SIZE_16 = 1,
+        SIZE_32 = 2,
+        SIZE_64 = 3,
+        SIZE_128 = 4,
+        SIZE_U8_FOLLOWS = 5,
+        SIZE_U16_FOLLOWS = 6,
+        SIZE_U32_FOLLOWS = 7
+    };
+
     uint8_t SDPSocket::Command::PDU::Serializer::PushDescriptor(uint8_t buffer[], const elementtype type, const uint32_t size)
     {
-        enum sizetype {
-            SIZE_8 = 0,
-            SIZE_16 = 1,
-            SIZE_32 = 2,
-            SIZE_64 = 3,
-            SIZE_128 = 4,
-            SIZE_U8_FOLLOWS = 5,
-            SIZE_U16_FOLLOWS = 6,
-            SIZE_U32_FOLLOWS = 7
-        };
-
         uint8_t offset = 0;
         buffer[offset++] = (type | SIZE_8);
 
@@ -31,12 +31,14 @@ namespace Bluetooth {
                 break;
             case INT:
             case UINT:
-                if (size == sizeof(uint8_t)) {
+                if (size == 1) {
                     // already set
-                } else if (size == sizeof(uint16_t)) {
+                } else if (size == 2) {
                     buffer[0] |= SIZE_16;
-                } else if (size == sizeof(uint32_t)) {
+                } else if (size == 4) {
                     buffer[0] |= SIZE_32;
+                } else if (size == 8) {
+                    buffer[0] |= SIZE_64;
                 } else {
                     ASSERT(false && "Invalid INT size");
                 }
@@ -73,9 +75,53 @@ namespace Bluetooth {
 
         return (offset);
     }
-    uint8_t SDPSocket::Command::PDU::Serializer::PopDescriptor(const uint8_t buffer[], elementtype& type, uint32_t& size) const
+
+    uint8_t SDPSocket::Command::PDU::Serializer::PopDescriptor(elementtype& type, uint32_t& size) const
     {
-        return 0;
+        uint8_t offset = 0;
+        uint8_t t = _buffer[_readerOffset + offset++];
+
+        switch (t & 7) {
+        case SIZE_8:
+            size = 1;
+            break;
+        case SIZE_16:
+            size = 2;
+            break;
+        case SIZE_32:
+            size = 4;
+            break;
+        case SIZE_64:
+            size = 8;
+            break;
+        case SIZE_128:
+            size = 16;
+            break;
+        case SIZE_U8_FOLLOWS:
+            size = _buffer[_readerOffset + offset++];
+            break;
+        case SIZE_U16_FOLLOWS:
+            size = (_buffer[_readerOffset + offset++] << 8);
+            size |= _buffer[_readerOffset + offset++];
+            break;
+        case SIZE_U32_FOLLOWS:
+            size = (_buffer[_readerOffset + offset++] << 24);
+            size |= (_buffer[_readerOffset + offset++] << 16);
+            size |= (_buffer[_readerOffset + offset++] << 8);
+            size |= _buffer[_readerOffset + offset++];
+            break;
+        default:
+            TRACE_L1(_T("Unexpected descriptor size in SDP payload [0x%01x]"), (t & 7));
+            size = 0;
+            break;
+        }
+
+        type = static_cast<elementtype>(t & 0xF8);
+        if (type == NIL) {
+            size = 0;
+        }
+
+        return (offset);
     }
 } // namespace Bluetooth
 

@@ -71,7 +71,7 @@ namespace Bluetooth {
                 static constexpr uint8_t HEADER_SIZE = 5;
 
                 class Serializer {
-                private:
+                public:
                     enum elementtype : uint8_t {
                         NIL = 0x00,
                         UINT = 0x08,
@@ -94,6 +94,14 @@ namespace Bluetooth {
                     };
 
                 public:
+                    Serializer()
+                        : _buffer(nullptr)
+                        , _bufferSize(0)
+                        , _filledSize(0)
+                        , _readerOffset(0)
+                        , _writerOffset(0)
+                    {
+                    }
                     Serializer(uint8_t buffer[], const uint32_t bufferSize, const uint32_t filledSize = 0)
                         : _buffer(buffer)
                         , _bufferSize(bufferSize)
@@ -109,6 +117,10 @@ namespace Bluetooth {
                     virtual ~Serializer() = default;
 
                 public:
+                    uint32_t Available() const
+                    {
+                        return (_writerOffset > _readerOffset? (_writerOffset - _readerOffset) : 0);
+                    }
                     uint32_t Length() const
                     {
                         return (_writerOffset);
@@ -117,9 +129,19 @@ namespace Bluetooth {
                     {
                         return (_buffer);
                     }
+                    void Assign(uint8_t buffer[], const uint32_t bufferSize)
+                    {
+                        _buffer = buffer;
+                        _bufferSize = bufferSize;
+                        _filledSize = bufferSize;
+                        _readerOffset = 0;
+                        _writerOffset = bufferSize;
+                    }
                     void Clear()
                     {
                         _writerOffset = 0;
+                        _readerOffset = 0;
+                        _filledSize = 0;
                     }
 
                 public:
@@ -140,6 +162,8 @@ namespace Bluetooth {
                         cont = (size == 0? Continuation::ABSENT : Continuation::FOLLOWS);
                         if (size != 0) {
                             Pop(data, size);
+                        } else {
+                            data.clear();
                         }
                     }
 
@@ -223,9 +247,15 @@ namespace Bluetooth {
                     }
 
                 public:
+                    void Next() const
+                    {
+                        uint8_t type = 0;
+                        Pop(type);
+
+                    }
                     void Pop(string& value, const uint16_t length) const
                     {
-                        value.copy(reinterpret_cast<char*>(&_buffer[_readerOffset]), length);
+                        value.assign(reinterpret_cast<char*>(&_buffer[_readerOffset]), length);
                         _readerOffset += length;
                     }
                     template<typename TYPE, /* dummy */ typename std::enable_if<std::is_enum<TYPE>::value, int>::type = 0>
@@ -251,6 +281,24 @@ namespace Bluetooth {
                                     | (_buffer[_readerOffset + 2] << 8) | _buffer[_readerOffset + 3]);
                         _readerOffset += 4;
                     }
+                    void Pop(uint32_t& value, uint32_t& size) const
+                    {
+                        elementtype type;
+                        _readerOffset += PopDescriptor(type, size);
+                        if (type == UINT) {
+                            if (size == 1) {
+                                uint8_t val; Pop(val); value = val;
+                            } else if (size == 2) {
+                                uint16_t val; Pop(val); value = val;
+                            } else if (size == 4) {
+                                uint32_t val; Pop(val); value = val;
+                            } else {
+                                TRACE_L1(_T("Unexpected integer size"));
+                            }
+                        } else {
+                            TRACE_L1(_T("Unexpected integer type"));
+                        }
+                    }
                     template<typename TYPE>
                     void Pop(std::list<TYPE>& list, const uint16_t count) const
                     {
@@ -261,21 +309,63 @@ namespace Bluetooth {
                             list.push_back(item);
                         }
                     }
+                    void Pop(Bluetooth::UUID& uuid) const
+                    {
+                        uint32_t size = 0;
+                        elementtype type;
+                        _readerOffset += PopDescriptor(type, size);
+                        if (size == 2) {
+                            uuid = Bluetooth::UUID((_buffer[_readerOffset] << 8) | _buffer[_readerOffset + 1]);
+                        } else {
+                            uint8_t buffer[size];
+                            uint8_t i = size;
+                            while (i-- > 0) {
+                                buffer[i] = _buffer[_readerOffset++];
+                            }
+                            uuid = Bluetooth::UUID(buffer);
+                        }
+                        _readerOffset += size;
+                    }
                     void Pop(const Inspector& inspector) const
                     {
                         uint32_t size = 0;
                         elementtype type;
-                        _readerOffset += PopDescriptor(&_buffer[_readerOffset], type, size);
+                        _readerOffset += PopDescriptor(type, size);
                         if (type == SEQ) {
-                            Serializer sequence(&_buffer[_readerOffset], size);
+                            Serializer sequence(&_buffer[_readerOffset], size, size);
                             inspector(sequence);
+                        } else {
+                            TRACE_L1(_T("Unexpected descriptor in SDP payload [0x%02x], expected SEQ"), type);
                         }
                         _readerOffset += size;
+                    }
+                    void Pop(Serializer& element) const
+                    {
+                        elementtype elemType;
+                        uint32_t elemSize;
+                        uint8_t descriptorSize = PopDescriptor(elemType, elemSize);
+                        if (Available() >= (descriptorSize + elemSize)) {
+                            element.Assign(&_buffer[_readerOffset], (descriptorSize + elemSize));
+                            _readerOffset += (descriptorSize + elemSize);
+                        } else {
+                            TRACE_L1(_T("Truncated SDP payload"));
+                            _readerOffset = _writerOffset;
+                        }
+                    }
+                    void Pop(Serializer& element, const uint32_t size) const
+                    {
+                        if (Available() >= size) {
+                            element.Assign(&_buffer[_readerOffset], size);
+                            _readerOffset += size;
+                        } else {
+                            TRACE_L1(_T("Truncated SDP payload"));
+                            _readerOffset = _writerOffset;
+                        }
                     }
 
                 private:
                     uint8_t PushDescriptor(uint8_t buffer[], const elementtype type, const uint32_t size = 0);
-                    uint8_t PopDescriptor(const uint8_t buffer[], elementtype& type, uint32_t& size) const;
+                    uint8_t PopDescriptor(elementtype& type, uint32_t& size) const;
 
                     void PushIntegerValue(const uint8_t value)
                     {
@@ -323,7 +413,8 @@ namespace Bluetooth {
                     InvalidContinuationState = 5,
                     InsufficientResources = 6,
                     Reserved = 255,
-                    DeserializationFailed
+                    DeserializationFailed,
+                    PacketContinuation
                 };
 
             public:
@@ -331,6 +422,9 @@ namespace Bluetooth {
                     : _bufferSize(bufferSize)
                     , _buffer(static_cast<uint8_t*>(::malloc(_bufferSize)))
                     , _size(0)
+                    , _transactionId(0)
+                    , _continuationOffset(0)
+                    , _payloadSize(0)
                 {
                     ASSERT(_buffer != nullptr);
                 }
@@ -346,6 +440,8 @@ namespace Bluetooth {
                 {
                     ::memset(_buffer, 0, PDU::HEADER_SIZE);
                     _size = 0;
+                    _continuationOffset = 0;
+                    _payloadSize = 0;
                 }
                 bool IsValid() const
                 {
@@ -365,22 +461,45 @@ namespace Bluetooth {
                 }
                 uint16_t TransactionId() const
                 {
-                    return (IsValid()? ((_buffer[1] << 8) | (_buffer[2])) : 0);
+                    return ((_buffer[1] << 8) | _buffer[2]);
+                }
+                void Finalize(const string& continuation = "")
+                {
+                    // Called during command construction or by retrigger due to continuation
+                    ASSERT(_size >= PDU::HEADER_SIZE);
+                    ASSERT(_continuationOffset >= PDU::HEADER_SIZE);
+
+                    // Increment transaction ID
+                    _transactionId++;
+                    _buffer[1] = (_transactionId >> 8);
+                    _buffer[2] = _transactionId;
+
+                    // Update size
+                    const uint16_t payloadSize = (_payloadSize + 1 + continuation.size());
+                    _buffer[3] = (payloadSize >> 8);
+                    _buffer[4] = payloadSize;
+
+                    // Attach continuation information
+                    _buffer[_continuationOffset] = continuation.size();
+                    ::memcpy(_buffer + _continuationOffset + 1, continuation.data(), continuation.size());
+                    _size = (PDU::HEADER_SIZE + payloadSize);
                 }
                 void Construct(const PDU::pdutype type, const Serializer& parameters)
                 {
-                    ASSERT(_bufferSize >= (PDU::HEADER_SIZE + parameters.Length()));
+                    const uint32_t maxPacketSize = (PDU::HEADER_SIZE + parameters.Length() + 1 + 16 /* continuation */);
+                    ASSERT(_bufferSize >= maxPacketSize);
 
                     Clear();
 
-                    if (_bufferSize >= (PDU::HEADER_SIZE + parameters.Length())) {
-                        PDU::Serializer header(_buffer, _bufferSize);
-                        header.Push(type);
-                        header.Push(static_cast<uint16_t>(0)); // transaction id not yet known
-                        header.Push(static_cast<uint16_t>(parameters.Length()));
+                    if (_bufferSize >= maxPacketSize) {
+                        ::memset(_buffer, 0, PDU::HEADER_SIZE);
+                        ::memcpy(_buffer + PDU::HEADER_SIZE, parameters.Data(), parameters.Length());
+                        _buffer[0] = type;
+                        _payloadSize = parameters.Length();
+                        _size = (PDU::HEADER_SIZE + _payloadSize);
+                        _continuationOffset = _size;
 
-                        ::memcpy(_buffer + header.Length(), parameters.Data(), parameters.Length());
-                        _size = (header.Length() + parameters.Length());
+                        Finalize();
                     } else {
                         TRACE(Trace::Error, (_T("Parameters to large to fit in PDU [%d]"), parameters.Length()));
                     }
@@ -392,19 +511,14 @@ namespace Bluetooth {
                     builder(parameters);
                     Construct(type, parameters);
                 }
-                void Finalize(const uint16_t transactionId)
-                {
-                    ASSERT(_buffer != nullptr);
-                    if (IsValid() == true) {
-                        _buffer[1] = (transactionId >> 8);
-                        _buffer[2] = transactionId;
-                    }
-                }
 
             private:
                 uint32_t _bufferSize;
                 uint8_t* _buffer;
                 uint32_t _size;
+                uint16_t _transactionId;
+                uint16_t _continuationOffset;
+                uint16_t _payloadSize;
             }; // class PDU
 
             class Request {
@@ -439,13 +553,13 @@ namespace Bluetooth {
                     }
                     return (result);
                 }
-                bool IsSent() const
+                void Finalize(const string& cont)
                 {
-                    return (_pdu.TransactionId() != 0);
+                    _pdu.Finalize(cont);
                 }
-                void Finalize(const uint16_t transactionId)
+                uint16_t TransactionId() const
                 {
-                    _pdu.Finalize(transactionId);
+                    return (_pdu.TransactionId());
                 }
 
             public:
@@ -456,7 +570,6 @@ namespace Bluetooth {
                     _pdu.Construct(PDU::ServiceSearchRequest, [&](PDU::Serializer& parameters) {
                         parameters.Push(services, true);
                         parameters.Push(maxResults);
-                        parameters.Push(PDU::Serializer::Continuation::ABSENT); // Will always fit 12 UUIDs in a single PDU
                     });
                 }
                 void ServiceAttribute(const uint32_t serviceHandle, const std::list<uint32_t>& attributeIdRanges)
@@ -467,7 +580,6 @@ namespace Bluetooth {
                         parameters.Push(serviceHandle);
                         parameters.Push(static_cast<uint16_t>(0xFFFFF - PDU::HEADER_SIZE));
                         parameters.Push(attributeIdRanges, true);
-                        parameters.Push(PDU::Serializer::Continuation::ABSENT);
                     });
                 }
                 void ServiceSearchAttribute(const std::list<UUID>& services, const std::list<uint32_t>& attributeIdRanges)
@@ -479,7 +591,6 @@ namespace Bluetooth {
                         parameters.Push(services, true);
                         parameters.Push(static_cast<uint16_t>(0xFFFFF - PDU::HEADER_SIZE));
                         parameters.Push(attributeIdRanges, true);
-                        parameters.Push(PDU::Serializer::Continuation::ABSENT);
                     });
                 }
 
@@ -500,8 +611,7 @@ namespace Bluetooth {
                 Response()
                     : _type(PDU::Invalid)
                     , _status(PDU::Reserved)
-                    , _transaction(0)
-                    , _length(0)
+                    , _payload(new uint8_t[2048], 2048)
                 {
                 }
                 ~Response() = default;
@@ -511,8 +621,10 @@ namespace Bluetooth {
                 {
                     _status = PDU::Reserved;
                     _type = PDU::Invalid;
-                    _length = 0;
                     _handles.clear();
+                    _attributes.clear();
+                    _continuationData.clear();
+                    _payload.Clear();
                 }
                 PDU::pdutype Type() const
                 {
@@ -522,19 +634,19 @@ namespace Bluetooth {
                 {
                     return (_status);
                 }
-                uint16_t Length() const
-                {
-                    return (_length);
-                }
                 const std::list<uint32_t>& Handles() const
                 {
-                    return _handles;
+                    return (_handles);
                 }
                 const std::map<uint16_t, string>& Attributes() const
                 {
-                    return _attributes;
+                    return (_attributes);
                 }
-                uint16_t Deserialize(const uint8_t stream[], const uint16_t length)
+                const string& Continuation() const
+                {
+                    return (_continuationData);
+                }
+                uint16_t Deserialize(const uint16_t reqTransactionId, const uint8_t stream[], const uint16_t length)
                 {
                     uint16_t result = 0;
 
@@ -543,44 +655,40 @@ namespace Bluetooth {
 
                     if (length >= PDU::HEADER_SIZE) {
                         PDU::Serializer header(const_cast<uint8_t*>(stream), PDU::HEADER_SIZE, PDU::HEADER_SIZE);
+                        uint16_t transactionId;
+                        uint16_t payloadLength;
+
+                        // Pick up the response header.
                         header.Pop(_type);
-                        header.Pop(_transaction);
-                        header.Pop(_length);
+                        header.Pop(transactionId);
+                        header.Pop(payloadLength);
 
-                        if (length >= header.Length() + _length) {
-                            PDU::Serializer parameters(const_cast<uint8_t*>(stream + header.Length()), _length, _length);
+                        if (reqTransactionId == transactionId) {
+                            if (length >= header.Length() + payloadLength) {
+                                PDU::Serializer parameters(const_cast<uint8_t*>(stream + header.Length()), payloadLength, payloadLength);
 
-                            switch(_type) {
-                            case PDU::ErrorResponse:
-                                parameters.Pop(_status);
-                                break;
-                            case PDU::ServiceSearchResponse:
-                                _status = DeserializeServiceSearchResponse(parameters);
-                                break;
-                            case PDU::ServiceAttributeResponse:
-                                _status = DeserializeServiceAttributeResponse(parameters);
-                                break;
-                            case PDU::ServiceSearchAttributeResponse:
-                                _status = DeserializeServicSearchAttributeResponse(parameters);
-                                break;
-                            default:
-                                _status = PDU::DeserializationFailed;
-                                break;
-                            }
-
-                            if (_status == PDU::Success) {
-                                PDU::Serializer::Continuation cont;
-                                string contData;
-                                parameters.Pop(cont, contData);
-
-                                if (cont != PDU::Serializer::Continuation::ABSENT) {
-                                    TRACE(Trace::Error, (_T("Continuation on response not supported")));
-                                     _status = PDU::DeserializationFailed;
+                                switch(_type) {
+                                case PDU::ErrorResponse:
+                                    parameters.Pop(_status);
+                                    break;
+                                case PDU::ServiceSearchResponse:
+                                    _status = DeserializeServiceSearchResponse(parameters);
+                                    break;
+                                case PDU::ServiceAttributeResponse:
+                                case PDU::ServiceSearchAttributeResponse: // same response
+                                    _status = DeserializeServiceAttributeResponse(parameters);
+                                    break;
+                                default:
+                                    _status = PDU::DeserializationFailed;
+                                    break;
                                 }
-                            }
 
-                            result = length;
-                            printf("deserialize finished\n");
+                                result = length;
+                            } else {
+                                TRACE_L1(_T("SDP response too short [%d]"), length);
+                            }
+                        } else {
+                            TRACE_L1(_T("SDP response out of order [%d vs %d]", reqTransactionId, transactionId));
                         }
                     }
 
@@ -595,16 +703,31 @@ namespace Bluetooth {
                     ASSERT(Type() == PDU::ServiceSearchResponse);
 
                     if (params.Length() >= 5) {
+                        PDU::Serializer payload;
                         uint16_t totalCount = 0;
                         uint16_t currentCount = 0;
 
                         params.Pop(totalCount);
-                        params.Pop(currentCount);
-                        params.Pop(_handles, currentCount);
 
-                        if (currentCount == _handles.size()) {
+                        // Pick up the payload, but not process it yet, wait until the chain of continued packets end.
+                        params.Pop(currentCount);
+                        params.Pop(payload, (currentCount * 4));
+                        _payload.Push(payload);
+
+                        // Get continuation data.
+                        PDU::Serializer::Continuation cont;
+                        params.Pop(cont, _continuationData);
+
+                        if (cont == PDU::Serializer::Continuation::ABSENT) {
+                            // No more continued packets, process all the concatenated payloads...
+                            // The payload is a list of DWORD handles.
+                            _payload.Pop(_handles, (_payload.Length() / 4));
                             result = PDU::Success;
+                        } else {
+                            result = PDU::PacketContinuation;
                         }
+                    } else {
+                        TRACE_L1(_T("Too short payload in ServiceSearchResponse [%d]"), params.Length());
                     }
 
                     return (result);
@@ -613,26 +736,47 @@ namespace Bluetooth {
                 {
                     PDU::errorid result = PDU::DeserializationFailed;
 
-                    ASSERT(Type() == PDU::ServiceAttributeResponse);
+                    ASSERT((Type() == PDU::ServiceAttributeResponse) || (Type() == PDU::ServiceSearchAttributeResponse));
 
                     if (params.Length() >= 2) {
                         uint16_t byteCount = 0;
+                        PDU::Serializer payload;
+
+                        // Pick up the payload, but not process it yet, wait until the chain of continued packets end.
                         params.Pop(byteCount);
-                        params.Pop([&](const PDU::Serializer& sequence) {
-                            // TODO
-                        });
-                    }
+                        params.Pop(payload, byteCount);
+                        _payload.Push(payload);
 
-                    return (result);
-                }
-                PDU::errorid DeserializeServicSearchAttributeResponse(const PDU::Serializer& params)
-                {
-                    PDU::errorid result = PDU::DeserializationFailed;
+                        // Get continuation data.
+                        PDU::Serializer::Continuation cont;
+                        params.Pop(cont, _continuationData);
 
-                    ASSERT(Type() == PDU::ServiceSearchAttributeResponse);
+                        if (cont == PDU::Serializer::Continuation::ABSENT) {
+                            // No more continued packets, process all the concatenated payloads...
+                            // The payload is a sequence of attribute:value pairs (where value can be a sequence too).
 
-                    if (params.Length() >= 2) {
-                        // TODO
+                            _payload.Pop([&](const PDU::Serializer& sequence) {
+                                while (sequence.Available() > 2) {
+                                    uint32_t attribute; uint32_t size;
+                                    PDU::Serializer value;
+
+                                    // Pick up the pair and store it.
+                                    sequence.Pop(attribute, size);
+                                    sequence.Pop(value);
+                                    _attributes.emplace(std::piecewise_construct,
+                                                        std::forward_as_tuple(attribute),
+                                                        std::forward_as_tuple(reinterpret_cast<const char*>(value.Data()), value.Length()));
+                                }
+
+                                if (sequence.Available() == 0) {
+                                    result = PDU::Success;
+                                }
+                            });
+                        } else {
+                            result = PDU::PacketContinuation;
+                        }
+                    } else {
+                        TRACE_L1(_T("Too short payload in ServiceAttributeResponse [%d]"), params.Length());
                     }
 
                     return (result);
@@ -641,10 +785,10 @@ namespace Bluetooth {
             private:
                 PDU::pdutype _type;
                 PDU::errorid _status;
-                uint16_t _transaction;
-                uint16_t _length;
                 std::list<uint32_t> _handles;
                 std::map<uint16_t, string> _attributes;
+                PDU::Serializer _payload;
+                string _continuationData;
             }; // class Response
 
         public:
@@ -702,10 +846,6 @@ namespace Bluetooth {
             {
                 return(_status);
             }
-            void Finalize(const uint16_t transactionId)
-            {
-                _request.Finalize(transactionId);
-            }
             bool IsValid() const
             {
                 return (_request.IsValid());
@@ -726,12 +866,20 @@ namespace Bluetooth {
             }
             uint16_t Deserialize(const uint8_t stream[], const uint16_t length) override
             {
-                return (_response.Deserialize(stream, length));
+                uint16_t result = _response.Deserialize(_request.TransactionId(), stream, length);
+                if ((_response.Continuation().empty() == false)) {
+                    // Will be retriggered, so update transaction ID and continuation
+                    _request.Finalize(_response.Continuation());
+                }
+                return (result);
             }
             Core::IInbound::state IsCompleted() const override
             {
-                return (_response.Type() != PDU::Invalid? Core::IInbound::COMPLETED
-                                                        : (_request.IsSent() ? Core::IInbound::INPROGRESS : Core::IInbound::RESEND));
+                if (_response.Continuation().empty() == false) {
+                    return (Core::IInbound::RESEND);
+                } else {
+                    return (_response.Type() != PDU::Invalid? Core::IInbound::COMPLETED : Core::IInbound::INPROGRESS);
+                }
             }
 
         private:
@@ -788,7 +936,7 @@ namespace Bluetooth {
     public:
         class Profile {
         public:
-            enum serviceid {
+            enum serviceid : uint16_t {
 		        ServiceDiscoveryServerServiceClassID = 0x1000,
                 BrowseGroupDescriptorServiceClassID = 0x1001,
                 PublicBrowseRoot = 0x1002,
@@ -894,7 +1042,7 @@ namespace Bluetooth {
 
             public:
                 Service(const uint32_t handle)
-                    : _recordHandle(handle)
+                    : _serviceRecordHandle(handle)
                 {
                 }
                 ~Service() = default;
@@ -915,24 +1063,58 @@ namespace Bluetooth {
             public:
                 uint32_t ServiceRecordHandle() const
                 {
-                    return (_recordHandle);
+                    return (_serviceRecordHandle);
                 }
                 const std::list<UUID>& ServiceClassIDList() const
                 {
-                    return (_classIDList);
+                    return (_serviceClassIDList);
                 }
-
-            private:
-                void Attribute(const uint16_t id, const string& data)
+                const std::list<std::pair<UUID, uint16_t>>& BluetoothProfileDescriptorList() const
                 {
-                    _attributes.emplace(id, data);
-                    // TODO
+                    return (_bluetoothProfileDescriptorList);
                 }
 
             private:
-                uint32_t _recordHandle;
-                std::list<UUID> _classIDList;
+                void Attribute(const uint16_t id, const string& value)
+                {
+                    Command::PDU::Serializer data((uint8_t*)value.data(), value.size(), value.size());
+
+                    // Lets deserialize some of the universal attributes...
+                    switch (static_cast<attributeid>(id)) {
+                    case attributeid::ServiceRecordHandle:
+                        uint32_t size;
+                        data.Pop(_serviceRecordHandle, size);
+                        break;
+                    case attributeid::ServiceClassIDList:
+                        data.Pop([&](const Command::PDU::Serializer& sequence) {
+                            while (sequence.Available()) {
+                                UUID uuid;
+                                sequence.Pop(uuid);
+                                _serviceClassIDList.emplace_back(uuid);
+                            }
+                        });
+                        break;
+                    case attributeid::BluetoothProfileDescriptorList:
+                        data.Pop([&](const Command::PDU::Serializer& sequence) {
+                            sequence.Pop([&](const Command::PDU::Serializer& pair) {
+                                UUID uuid;
+                                uint32_t version; uint32_t size;
+                                pair.Pop(uuid);
+                                pair.Pop(version, size);
+                                _bluetoothProfileDescriptorList.emplace_back(std::make_pair(uuid, version));
+                            });
+                        });
+                    default:
+                        _attributes.emplace(id, value);
+                        break;
+                    }
+                }
+
+            private:
+                uint32_t _serviceRecordHandle;
                 std::map<uint16_t, string> _attributes;
+                std::list<UUID> _serviceClassIDList;
+                std::list<std::pair<UUID, uint16_t>> _bluetoothProfileDescriptorList;
             }; // class Service
 
         public:
@@ -1054,7 +1236,6 @@ namespace Bluetooth {
             , _adminLock()
             , _callback(*this)
             , _queue()
-            , _transactionId(0)
         {
         }
         ~SDPSocket() = default;
@@ -1062,14 +1243,11 @@ namespace Bluetooth {
     public:
         void Execute(const uint32_t waitTime, Command& cmd, const Handler& handler)
         {
-            printf("Execute\n");
             _adminLock.Lock();
 
             if (cmd.IsValid() == true) {
-                cmd.Finalize(++_transactionId);
                 _queue.emplace_back(waitTime, cmd, handler);
                 if (_queue.size() == 1) {
-                    printf("Send\n");
                     Send(waitTime, cmd, &_callback, &cmd);
                 }
             } else {
@@ -1103,10 +1281,8 @@ namespace Bluetooth {
         {
             uint32_t result = 0;
 
-            if (availableData >= 1) {
-            }
-            else {
-                TRACE_L1("**** Unexpected data for deserialization [%d] !!!!", availableData);
+            if (availableData == 0) {
+                TRACE_L1("Unexpected data for deserialization [%d]", availableData);
             }
 
             return (result);
@@ -1138,7 +1314,6 @@ namespace Bluetooth {
         Callback _callback;
         std::list<Entry> _queue;
         struct l2cap_conninfo _connectionInfo;
-        uint16_t _transactionId;
     }; // class SDPSocket
 
 } // namespace Bluetooth
