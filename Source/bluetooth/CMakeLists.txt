@@ -25,6 +25,7 @@ add_library(${TARGET} SHARED
         HCISocket.cpp
         GATTSocket.cpp
         SDPSocket.cpp
+        SDPExplorer.cpp
         Profile.cpp
         UUID.cpp
         Definitions.cpp
@@ -35,6 +36,7 @@ set(PUBLIC_HEADERS
         HCISocket.h
         GATTSocket.h
         SDPSocket.h
+        SDPExplorer.h
         Profile.h
         UUID.h
         Module.h

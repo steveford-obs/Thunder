@@ -16,15 +16,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-#include "IDriver.h"
-#include "HCISocket.h"
-#include "GATTSocket.h"
-#include "SDPSocket.h"
 #include "SDPExplorer.h"
-#include "Profile.h"
 
-#ifdef __WINDOWS__
-#pragma comment(lib, "bluetooth.lib")
-#endif

@@ -247,12 +247,6 @@ namespace Bluetooth {
                     }
 
                 public:
-                    void Next() const
-                    {
-                        uint8_t type = 0;
-                        Pop(type);
-
-                    }
                     void Pop(string& value, const uint16_t length) const
                     {
                         value.assign(reinterpret_cast<char*>(&_buffer[_readerOffset]), length);
@@ -266,37 +260,37 @@ namespace Bluetooth {
                         Pop(temp);
                         value = static_cast<TYPE>(temp);
                     }
-                    void Pop(uint8_t& value) const
+                    template<typename TYPE, /* dummy */ typename std::enable_if<std::is_integral<TYPE>::value, int>::type = 0>
+                    void Pop(TYPE& value, const uint32_t descriptor = false, uint32_t* outSize = nullptr) const
                     {
-                        value = _buffer[_readerOffset++];
-                    }
-                    void Pop(uint16_t& value) const
-                    {
-                        value = ((_buffer[_readerOffset] << 8) | _buffer[_readerOffset + 1]);
-                        _readerOffset += 2;
-                    }
-                    void Pop(uint32_t& value) const
-                    {
-                        value = ((_buffer[_readerOffset] << 24) | (_buffer[_readerOffset + 1] << 16)
-                                    | (_buffer[_readerOffset + 2] << 8) | _buffer[_readerOffset + 3]);
-                        _readerOffset += 4;
-                    }
-                    void Pop(uint32_t& value, uint32_t& size) const
-                    {
-                        elementtype type;
-                        _readerOffset += PopDescriptor(type, size);
-                        if (type == UINT) {
-                            if (size == 1) {
-                                uint8_t val; Pop(val); value = val;
-                            } else if (size == 2) {
-                                uint16_t val; Pop(val); value = val;
-                            } else if (size == 4) {
-                                uint32_t val; Pop(val); value = val;
+                        if (descriptor == true) {
+                            elementtype type;
+                            uint32_t size = 0;
+                            _readerOffset += PopDescriptor(type, size);
+                            if (type == UINT) {
+                                if (size > sizeof(TYPE)) {
+                                    TRACE_L1(_T("Warning: integer value possibly truncated!"));
+                                }
+                                if (size == 1) {
+                                    uint8_t val; PopIntegerValue(val); value = val;
+                                } else if (size == 2) {
+                                    uint16_t val; PopIntegerValue(val); value = val;
+                                } else if (size == 4) {
+                                    uint32_t val; PopIntegerValue(val); value = val;
+                                } else {
+                                    TRACE_L1(_T("Unexpected integer size"));
+                                }
+                                if (outSize != nullptr) {
+                                    (*outSize) = size;
+                                }
                             } else {
-                                TRACE_L1(_T("Unexpected integer size"));
+                                TRACE_L1(_T("Unexpected integer type"));
                             }
                         } else {
-                            TRACE_L1(_T("Unexpected integer type"));
+                            PopIntegerValue(value);
+                            if (outSize != nullptr) {
+                                (*outSize) = sizeof(TYPE);
+                            }
                         }
                     }
                     template<typename TYPE>
@@ -382,6 +376,21 @@ namespace Bluetooth {
                         _buffer[_writerOffset++] = (value >> 16);
                         _buffer[_writerOffset++] = (value >> 8);
                         _buffer[_writerOffset++] = value;
+                    }
+                    void PopIntegerValue(uint8_t& value) const
+                    {
+                        value = _buffer[_readerOffset++];
+                    }
+                    void PopIntegerValue(uint16_t& value) const
+                    {
+                        value = ((_buffer[_readerOffset] << 8) | _buffer[_readerOffset + 1]);
+                        _readerOffset += 2;
+                    }
+                    void PopIntegerValue(uint32_t& value) const
+                    {
+                        value = ((_buffer[_readerOffset] << 24) | (_buffer[_readerOffset + 1] << 16)
+                                    | (_buffer[_readerOffset + 2] << 8) | _buffer[_readerOffset + 3]);
+                        _readerOffset += 4;
                     }
 
                    private:
@@ -646,141 +655,12 @@ namespace Bluetooth {
                 {
                     return (_continuationData);
                 }
-                uint16_t Deserialize(const uint16_t reqTransactionId, const uint8_t stream[], const uint16_t length)
-                {
-                    uint16_t result = 0;
 
-                    printf("L2CAP received [%d]: ", length);
-                    for (uint8_t index = 0; index < (length - 1); index++) { printf("%02X:", stream[index]); } printf("%02X\n", stream[length - 1]);
-
-                    if (length >= PDU::HEADER_SIZE) {
-                        PDU::Serializer header(const_cast<uint8_t*>(stream), PDU::HEADER_SIZE, PDU::HEADER_SIZE);
-                        uint16_t transactionId;
-                        uint16_t payloadLength;
-
-                        // Pick up the response header.
-                        header.Pop(_type);
-                        header.Pop(transactionId);
-                        header.Pop(payloadLength);
-
-                        if (reqTransactionId == transactionId) {
-                            if (length >= header.Length() + payloadLength) {
-                                PDU::Serializer parameters(const_cast<uint8_t*>(stream + header.Length()), payloadLength, payloadLength);
-
-                                switch(_type) {
-                                case PDU::ErrorResponse:
-                                    parameters.Pop(_status);
-                                    break;
-                                case PDU::ServiceSearchResponse:
-                                    _status = DeserializeServiceSearchResponse(parameters);
-                                    break;
-                                case PDU::ServiceAttributeResponse:
-                                case PDU::ServiceSearchAttributeResponse: // same response
-                                    _status = DeserializeServiceAttributeResponse(parameters);
-                                    break;
-                                default:
-                                    _status = PDU::DeserializationFailed;
-                                    break;
-                                }
-
-                                result = length;
-                            } else {
-                                TRACE_L1(_T("SDP response too short [%d]"), length);
-                            }
-                        } else {
-                            TRACE_L1(_T("SDP response out of order [%d vs %d]", reqTransactionId, transactionId));
-                        }
-                    }
-
-                    return (result);
-                }
+                uint16_t Deserialize(const uint16_t reqTransactionId, const uint8_t stream[], const uint16_t length);
 
             private:
-                PDU::errorid DeserializeServiceSearchResponse(const PDU::Serializer& params)
-                {
-                    PDU::errorid result = PDU::DeserializationFailed;
-
-                    ASSERT(Type() == PDU::ServiceSearchResponse);
-
-                    if (params.Length() >= 5) {
-                        PDU::Serializer payload;
-                        uint16_t totalCount = 0;
-                        uint16_t currentCount = 0;
-
-                        params.Pop(totalCount);
-
-                        // Pick up the payload, but not process it yet, wait until the chain of continued packets end.
-                        params.Pop(currentCount);
-                        params.Pop(payload, (currentCount * 4));
-                        _payload.Push(payload);
-
-                        // Get continuation data.
-                        PDU::Serializer::Continuation cont;
-                        params.Pop(cont, _continuationData);
-
-                        if (cont == PDU::Serializer::Continuation::ABSENT) {
-                            // No more continued packets, process all the concatenated payloads...
-                            // The payload is a list of DWORD handles.
-                            _payload.Pop(_handles, (_payload.Length() / 4));
-                            result = PDU::Success;
-                        } else {
-                            result = PDU::PacketContinuation;
-                        }
-                    } else {
-                        TRACE_L1(_T("Too short payload in ServiceSearchResponse [%d]"), params.Length());
-                    }
-
-                    return (result);
-                }
-                PDU::errorid DeserializeServiceAttributeResponse(const PDU::Serializer& params)
-                {
-                    PDU::errorid result = PDU::DeserializationFailed;
-
-                    ASSERT((Type() == PDU::ServiceAttributeResponse) || (Type() == PDU::ServiceSearchAttributeResponse));
-
-                    if (params.Length() >= 2) {
-                        uint16_t byteCount = 0;
-                        PDU::Serializer payload;
-
-                        // Pick up the payload, but not process it yet, wait until the chain of continued packets end.
-                        params.Pop(byteCount);
-                        params.Pop(payload, byteCount);
-                        _payload.Push(payload);
-
-                        // Get continuation data.
-                        PDU::Serializer::Continuation cont;
-                        params.Pop(cont, _continuationData);
-
-                        if (cont == PDU::Serializer::Continuation::ABSENT) {
-                            // No more continued packets, process all the concatenated payloads...
-                            // The payload is a sequence of attribute:value pairs (where value can be a sequence too).
-
-                            _payload.Pop([&](const PDU::Serializer& sequence) {
-                                while (sequence.Available() > 2) {
-                                    uint32_t attribute; uint32_t size;
-                                    PDU::Serializer value;
-
-                                    // Pick up the pair and store it.
-                                    sequence.Pop(attribute, size);
-                                    sequence.Pop(value);
-                                    _attributes.emplace(std::piecewise_construct,
-                                                        std::forward_as_tuple(attribute),
-                                                        std::forward_as_tuple(reinterpret_cast<const char*>(value.Data()), value.Length()));
-                                }
-
-                                if (sequence.Available() == 0) {
-                                    result = PDU::Success;
-                                }
-                            });
-                        } else {
-                            result = PDU::PacketContinuation;
-                        }
-                    } else {
-                        TRACE_L1(_T("Too short payload in ServiceAttributeResponse [%d]"), params.Length());
-                    }
-
-                    return (result);
-                }
+                PDU::errorid DeserializeServiceSearchResponse(const PDU::Serializer& params);
+                PDU::errorid DeserializeServiceAttributeResponse(const PDU::Serializer& params);
 
             private:
                 PDU::pdutype _type;
@@ -932,303 +812,6 @@ namespace Bluetooth {
             Command& _cmd;
             Handler _handler;
         }; // class Entry
-
-    public:
-        class Profile {
-        public:
-            enum serviceid : uint16_t {
-		        ServiceDiscoveryServerServiceClassID = 0x1000,
-                BrowseGroupDescriptorServiceClassID = 0x1001,
-                PublicBrowseRoot = 0x1002,
-                SerialPort = 0x1101,
-                LANAccessUsingPPP = 0x1102,
-                DialupNetworking = 0x1103,
-                IrMCSync = 0x1104,
-                OBEXObjectPush = 0x1105,
-                OBEXFileTransfer = 0x1106,
-                IrMCSyncCommand = 0x1107,
-                HeadsetHSP = 0x1108,
-                CordlessTelephony = 0x1109,
-                AudioSource = 0x110A,
-                AudioSink = 0x110B,
-                AVRemoteControlTarget = 0x110C,
-                AdvancedAudioDistribution = 0x110D,
-                AVRemoteControl = 0x110E,
-                AVRemoteControlController = 0x110F,
-                Intercom = 0x1110,
-                Fax = 0x1111,
-                HeadsetAudioGateway = 0x1112,
-                WAP = 0x1113,
-                WAPClient = 0x1114,
-                PANU = 0x1115,
-                NAP = 0x1116,
-                GN = 0x1117,
-                DirectPrinting = 0x1118,
-                ReferencePrinting = 0x1119,
-                BasicImagingProfile = 0x111A,
-                ImagingResponder = 0x111B,
-                ImagingAutomaticArchive = 0x111C,
-                ImagingReferencedObjects = 0x111D,
-                Handsfree = 0x111E,
-                HandsfreeAudioGateway = 0x111F,
-                DirectPrintingReferenceObjectsService = 0x1120,
-                ReflectedUI = 0x1121,
-                BasicPrinting = 0x1122,
-                PrintingStatus = 0x1123,
-                HumanInterfaceDeviceService = 0x1124,
-                HardcopyCableReplacement = 0x1125,
-                HCRPrint = 0x1126,
-                HCRScan = 0x1127,
-                CommonISDNAccess = 0x1128,
-                SIMAccess = 0x112D,
-                PhonebookAccessPCE = 0x112E,
-                PhonebookAccessPSE = 0x112F,
-                PhonebookAccess = 0x1130,
-                HeadsetHS = 0x1131,
-                MessageAccessServer = 0x1132,
-                MessageNotificationServer = 0x1133,
-                MessageAccessProfile = 0x1134,
-                GNSS = 0x1135,
-                GNSSServer = 0x1136,
-                ThreeDDisplay = 0x1137,
-                ThreeDGlasses = 0x1138,
-                ThreeDSynchronisation = 0x1339,
-                MPSProfile = 0x113A,
-                MPSSC = 0x113B,
-                CTNAccessService = 0x113C,
-                CTNNotificationService = 0x113D,
-                CTNProfile= 0x113E,
-                PnPInformation = 0x1200,
-                GenericNetworking = 0x1201,
-                GenericFileTransfer = 0x1202,
-                GenericAudio = 0x1203,
-                GenericTelephony = 0x1204,
-                UPNPService = 0x1205,
-                UPNPIPService = 0x1206,
-                ESDPUPNPIPPAN = 0x1300,
-                ESDPUPNPIPLAP = 0x1301,
-                ESDPUPNPL2CAP = 0x1302,
-                VideoSource = 0x1303,
-                VideoSink = 0x1304,
-                VideoDistribution = 0x1305,
-                HDP = 0x1400,
-                HDPSource = 0x1401,
-                HDPSink = 0x1402
-            };
-
-        public:
-            typedef std::function<void(const uint32_t)> Handler;
-
-            class Service {
-                friend class Profile;
-
-            private:
-                enum class attributeid : uint16_t {
-                    // universal attributes
-                    ServiceRecordHandle = 0,
-                    ServiceClassIDList = 1,
-                    ServiceRecordState = 2,
-                    ServiceID = 3,
-                    ProtocolDescriptorList = 4,
-                    BrowseGroupList = 5,
-                    LanguageBaseAttributeIDList = 6,
-                    ServiceInfoTimeToLive = 7,
-                    ServiceAvailability = 8,
-                    BluetoothProfileDescriptorList = 9,
-                    DocumentationURL = 10,
-                    ClientExecutableURL = 11,
-                    IconURL = 12
-                };
-
-            public:
-                Service(const uint32_t handle)
-                    : _serviceRecordHandle(handle)
-                {
-                }
-                ~Service() = default;
-
-            public:
-                bool HasAttribute(uint16_t index) const
-                {
-                    auto it = _attributes.find(index);
-                    return (it != _attributes.end());
-                }
-                const string& Attribute(uint16_t index) const
-                {
-                    static string empty{};
-                    auto it = _attributes.find(index);
-                    return (it != _attributes.end()? (*it).second : empty);
-                }
-
-            public:
-                uint32_t ServiceRecordHandle() const
-                {
-                    return (_serviceRecordHandle);
-                }
-                const std::list<UUID>& ServiceClassIDList() const
-                {
-                    return (_serviceClassIDList);
-                }
-                const std::list<std::pair<UUID, uint16_t>>& BluetoothProfileDescriptorList() const
-                {
-                    return (_bluetoothProfileDescriptorList);
-                }
-
-            private:
-                void Attribute(const uint16_t id, const string& value)
-                {
-                    Command::PDU::Serializer data((uint8_t*)value.data(), value.size(), value.size());
-
-                    // Lets deserialize some of the universal attributes...
-                    switch (static_cast<attributeid>(id)) {
-                    case attributeid::ServiceRecordHandle:
-                        uint32_t size;
-                        data.Pop(_serviceRecordHandle, size);
-                        break;
-                    case attributeid::ServiceClassIDList:
-                        data.Pop([&](const Command::PDU::Serializer& sequence) {
-                            while (sequence.Available()) {
-                                UUID uuid;
-                                sequence.Pop(uuid);
-                                _serviceClassIDList.emplace_back(uuid);
-                            }
-                        });
-                        break;
-                    case attributeid::BluetoothProfileDescriptorList:
-                        data.Pop([&](const Command::PDU::Serializer& sequence) {
-                            sequence.Pop([&](const Command::PDU::Serializer& pair) {
-                                UUID uuid;
-                                uint32_t version; uint32_t size;
-                                pair.Pop(uuid);
-                                pair.Pop(version, size);
-                                _bluetoothProfileDescriptorList.emplace_back(std::make_pair(uuid, version));
-                            });
-                        });
-                    default:
-                        _attributes.emplace(id, value);
-                        break;
-                    }
-                }
-
-            private:
-                uint32_t _serviceRecordHandle;
-                std::map<uint16_t, string> _attributes;
-                std::list<UUID> _serviceClassIDList;
-                std::list<std::pair<UUID, uint16_t>> _bluetoothProfileDescriptorList;
-            }; // class Service
-
-        public:
-            Profile()
-                : _socket(nullptr)
-                , _command()
-                , _handler(nullptr)
-                , _services()
-                , _servicesIterator(_services.end())
-                , _expired(0)
-            {
-            }
-            ~Profile() = default;
-
-        public:
-            uint32_t Discover(const uint32_t waitTime, SDPSocket& socket, const std::list<UUID>& uuids, const Handler& handler)
-            {
-                uint32_t result = Core::ERROR_INPROGRESS;
-
-                _handler = handler;
-                _socket = &socket;
-                _services.clear();
-                _expired = Core::Time::Now().Add(waitTime).Ticks();
-
-                _command.ServiceSearch(uuids);
-                _socket->Execute(waitTime, _command, [&](const SDPSocket::Command& cmd) {
-                    if ((cmd.Status() == Core::ERROR_NONE)
-                            && (cmd.Result().Status() == Command::PDU::Success)
-                            && (cmd.Result().Type() == Command::PDU::ServiceSearchResponse)) {
-                                ServiceSearchFinished(cmd.Result());
-                    } else {
-                        Report(Core::ERROR_GENERAL);
-                    }
-                });
-
-                return (result);
-            }
-            const std::list<Service>& Services() const
-            {
-                return (_services);
-            }
-
-        private:
-            void ServiceSearchFinished(const Command::Response& response)
-            {
-                if (response.Handles().empty() == false) {
-                    for (uint32_t const& handle : response.Handles()) {
-                        _services.emplace_back(handle);
-                    }
-
-                    _servicesIterator = _services.begin();
-                    RetrieveAttributes();
-                } else {
-                    Report(Core::ERROR_UNAVAILABLE);
-                }
-            }
-            void RetrieveAttributes()
-            {
-                if (_servicesIterator != _services.end()) {
-                    const uint32_t waitTime = AvailableTime();
-                    if (waitTime > 0) {
-                        _command.ServiceAttribute((*_servicesIterator).ServiceRecordHandle());
-                        _socket->Execute(waitTime, _command, [&](const SDPSocket::Command& cmd) {
-                            if ((cmd.Status() == Core::ERROR_NONE)
-                                && (cmd.Result().Status() == Command::PDU::Success)
-                                && (cmd.Result().Type() == Command::PDU::ServiceAttributeResponse)) {
-                                    ServiceAttributeFinished(cmd.Result());
-                            } else {
-                                Report(Core::ERROR_GENERAL);
-                            }
-                        });
-                    }
-                } else {
-                    Report(Core::ERROR_NONE);
-                }
-            }
-            void ServiceAttributeFinished(const Command::Response& response)
-            {
-                for (auto const& attr : response.Attributes()) {
-                    (*_servicesIterator).Attribute(attr.first, attr.second);
-                }
-
-                _servicesIterator++;
-                RetrieveAttributes();
-            }
-            void Report(const uint32_t result)
-            {
-                if (_socket != nullptr) {
-                    Handler caller = _handler;
-                    _socket = nullptr;
-                    _handler = nullptr;
-                    _expired = 0;
-
-                    caller(result);
-                }
-            }
-            uint32_t AvailableTime()
-            {
-                uint64_t now = Core::Time::Now().Ticks();
-                uint32_t result = (now >= _expired ? 0 : static_cast<uint32_t>((_expired - now) / Core::Time::TicksPerMillisecond));
-                if (result == 0) {
-                    Report(Core::ERROR_TIMEDOUT);
-                }
-                return (result);
-            }
-
-        public:
-            SDPSocket* _socket;
-            SDPSocket::Command _command;
-            Handler _handler;
-            std::list<Service> _services;
-            std::list<Service>::iterator _servicesIterator;
-            uint64_t _expired;
-        }; // class Profile
 
     public:
         SDPSocket(const Core::NodeId& localNode, const Core::NodeId& remoteNode, const uint16_t maxMTU)
