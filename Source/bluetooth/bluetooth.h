@@ -22,7 +22,8 @@
 #include "HCISocket.h"
 #include "GATTSocket.h"
 #include "SDPSocket.h"
-#include "SDPExplorer.h"
+#include "SDPProfile.h"
+#include "AVDTPSocket.h"
 #include "Profile.h"
 
 #ifdef __WINDOWS__
