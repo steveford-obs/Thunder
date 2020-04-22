@@ -15,7 +15,7 @@ namespace Bluetooth {
         SIZE_U32_FOLLOWS = 7
     };
 
-    uint8_t SDPSocket::Command::PDU::Serializer::PushDescriptor(uint8_t buffer[], const elementtype type, const uint32_t size)
+    uint8_t SDPSocket::Record::PushDescriptor(uint8_t buffer[], const elementtype type, const uint32_t size)
     {
         uint8_t offset = 0;
         buffer[offset++] = (type | SIZE_8);
@@ -76,7 +76,7 @@ namespace Bluetooth {
         return (offset);
     }
 
-    uint8_t SDPSocket::Command::PDU::Serializer::PopDescriptor(elementtype& type, uint32_t& size) const
+    uint8_t SDPSocket::Record::PopDescriptor(elementtype& type, uint32_t& size) const
     {
         uint8_t offset = 0;
         uint8_t t = _buffer[_readerOffset + offset++];
@@ -132,7 +132,7 @@ namespace Bluetooth {
         for (uint8_t index = 0; index < (length - 1); index++) { printf("%02X:", stream[index]); } printf("%02X\n", stream[length - 1]);
 
         if (length >= PDU::HEADER_SIZE) {
-            PDU::Serializer header(const_cast<uint8_t*>(stream), PDU::HEADER_SIZE, PDU::HEADER_SIZE);
+            Record header(const_cast<uint8_t*>(stream), PDU::HEADER_SIZE, PDU::HEADER_SIZE);
             uint16_t transactionId;
             uint16_t payloadLength;
 
@@ -143,7 +143,7 @@ namespace Bluetooth {
 
             if (reqTransactionId == transactionId) {
                 if (length >= header.Length() + payloadLength) {
-                    PDU::Serializer parameters(const_cast<uint8_t*>(stream + header.Length()), payloadLength, payloadLength);
+                    Record parameters(const_cast<uint8_t*>(stream + header.Length()), payloadLength, payloadLength);
 
                     switch(_type) {
                     case PDU::ErrorResponse:
@@ -173,32 +173,32 @@ namespace Bluetooth {
         return (result);
     }
 
-    SDPSocket::Command::PDU::errorid SDPSocket::Command::Response::DeserializeServiceSearchResponse(const SDPSocket::Command::PDU::Serializer& params)
+    SDPSocket::Command::PDU::errorid SDPSocket::Command::Response::DeserializeServiceSearchResponse(const SDPSocket::Record& params)
     {
         PDU::errorid result = PDU::DeserializationFailed;
 
         ASSERT(Type() == PDU::ServiceSearchResponse);
 
         if (params.Length() >= 5) {
-            PDU::Serializer payload;
+            Record payload;
             uint16_t totalCount = 0;
             uint16_t currentCount = 0;
 
             params.Pop(totalCount);
 
-            // Pick up the payload, but not process it yet, wait until the chain of continued packets end.
+            // Pick up the payload, but not process it yet, wait until the chain of continued packets ends.
             params.Pop(currentCount);
-            params.Pop(payload, (currentCount * 4));
+            params.Pop(payload, (currentCount * sizeof(uint32_t)));
             _payload.Push(payload);
 
             // Get continuation data.
-            PDU::Serializer::Continuation cont;
+            Record::Continuation cont;
             params.Pop(cont, _continuationData);
 
-            if (cont == PDU::Serializer::Continuation::ABSENT) {
+            if (cont == Record::Continuation::ABSENT) {
                 // No more continued packets, process all the concatenated payloads...
                 // The payload is a list of DWORD handles.
-                _payload.Pop(_handles, (_payload.Length() / 4));
+                _payload.Pop(_handles, (_payload.Length() / sizeof(uint32_t)));
                 result = PDU::Success;
             } else {
                 result = PDU::PacketContinuation;
@@ -210,7 +210,7 @@ namespace Bluetooth {
         return (result);
     }
 
-    SDPSocket::Command::PDU::errorid SDPSocket::Command::Response::DeserializeServiceAttributeResponse(const SDPSocket::Command::PDU::Serializer& params)
+    SDPSocket::Command::PDU::errorid SDPSocket::Command::Response::DeserializeServiceAttributeResponse(const SDPSocket::Record& params)
     {
         PDU::errorid result = PDU::DeserializationFailed;
 
@@ -218,32 +218,32 @@ namespace Bluetooth {
 
         if (params.Length() >= 2) {
             uint16_t byteCount = 0;
-            PDU::Serializer payload;
+            Record payload;
 
-            // Pick up the payload, but not process it yet, wait until the chain of continued packets end.
+            // Pick up the payload, but not process it yet, wait until the chain of continued packets ends.
             params.Pop(byteCount);
             params.Pop(payload, byteCount);
             _payload.Push(payload);
 
             // Get continuation data.
-            PDU::Serializer::Continuation cont;
+            Record::Continuation cont;
             params.Pop(cont, _continuationData);
 
-            if (cont == PDU::Serializer::Continuation::ABSENT) {
+            if (cont == Record::Continuation::ABSENT) {
                 // No more continued packets, process all the concatenated payloads...
                 // The payload is a sequence of attribute:value pairs (where value can be a sequence too).
 
-                _payload.Pop([&](const PDU::Serializer& sequence) {
+                _payload.Pop(use_descriptor, [&](const Record& sequence) {
                     while (sequence.Available() > 2) {
                         uint32_t attribute;
-                        PDU::Serializer value;
+                        Record value;
 
                         // Pick up the pair and store it.
-                        sequence.Pop(attribute, true);
-                        sequence.Pop(value);
+                        sequence.Pop(use_descriptor, attribute);
+                        sequence.Pop(use_descriptor, value);
                         _attributes.emplace(std::piecewise_construct,
                                             std::forward_as_tuple(attribute),
-                                            std::forward_as_tuple(reinterpret_cast<const char*>(value.Data()), value.Length()));
+                                            std::forward_as_tuple(value));
                     }
 
                     if (sequence.Available() == 0) {

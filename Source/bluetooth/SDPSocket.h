@@ -64,342 +64,433 @@ namespace Bluetooth {
     public:
         static constexpr uint32_t CommunicationTimeout = 2000; /* 2 seconds. */
 
+        struct use_descriptor_t{};
+        static constexpr use_descriptor_t use_descriptor = use_descriptor_t(); // for selecting a proper overload
+
+        class Record {
+        public:
+            enum elementtype : uint8_t {
+                NIL = 0x00,
+                UINT = 0x08,
+                INT = 0x10,
+                UUID = 0x18,
+                TEXT = 0x20,
+                BOOL = 0x28,
+                SEQ = 0x30,
+                ALT = 0x38,
+                URL = 0x40,
+            };
+
+        public:
+            using Builder = std::function<void(Record&)>;
+            using Inspector = std::function<void(const Record&)>;
+
+            enum class Continuation : uint8_t {
+                ABSENT = 0,
+                FOLLOWS
+            };
+
+        public:
+            Record()
+                : _buffer(nullptr)
+                , _bufferSize(0)
+                , _filledSize(0)
+                , _readerOffset(0)
+                , _writerOffset(0)
+            {
+            }
+            Record(const Record& buffer)
+                : _buffer(const_cast<uint8_t*>(buffer.Data()))
+                , _bufferSize(buffer.Length())
+                , _filledSize(_bufferSize)
+                , _readerOffset(0)
+                , _writerOffset(_bufferSize)
+            {
+            }
+            Record(uint8_t buffer[], const uint32_t bufferSize, const uint32_t filledSize = 0)
+                : _buffer(buffer)
+                , _bufferSize(bufferSize)
+                , _filledSize(filledSize)
+                , _readerOffset(0)
+                , _writerOffset(filledSize)
+            {
+                ASSERT(_buffer != nullptr);
+                ASSERT(_bufferSize != 0);
+                ASSERT(_bufferSize >= _filledSize);
+            }
+            Record& operator=(const Record&) = delete;
+
+            ~Record() = default;
+
+        public:
+            const string ToString() const
+            {
+                string val;
+                Core::ToHexString(Data(), Length(), val);
+                return (val);
+            }
+
+        public:
+            uint32_t Available() const
+            {
+                return (_writerOffset > _readerOffset? (_writerOffset - _readerOffset) : 0);
+            }
+            uint32_t Length() const
+            {
+                return (_writerOffset);
+            }
+            const uint8_t* Data() const
+            {
+                return (_buffer);
+            }
+            void Assign(uint8_t buffer[], const uint32_t bufferSize)
+            {
+                _buffer = buffer;
+                _bufferSize = bufferSize;
+                _filledSize = bufferSize;
+                _writerOffset = bufferSize;
+                Rewind();
+            }
+            void Clear()
+            {
+                _writerOffset = 0;
+                _filledSize = 0;
+                Rewind();
+            }
+            void Rewind() const
+            {
+                _readerOffset = 0;
+            }
+
+        public:
+            void Push(const Continuation cont, const string& data = _T(""))
+            {
+                if (cont == Continuation::ABSENT) {
+                    Push(static_cast<uint8_t>(0));
+                } else {
+                    ASSERT(data.length() <= 16)
+                    Push(static_cast<uint8_t>(data.length()));
+                    Push(data);
+                }
+            }
+            void Pop(Continuation& cont, std::string& data) const
+            {
+                uint8_t size = 0;
+                Pop(size);
+                cont = (size == 0? Continuation::ABSENT : Continuation::FOLLOWS);
+                if (size != 0) {
+                    Pop(data, size);
+                } else {
+                    data.clear();
+                }
+            }
+
+        public:
+            void Push()
+            {
+            }
+            void Push(use_descriptor_t)
+            {
+                _writerOffset += PushDescriptor(&_buffer[_writerOffset], NIL);
+            }
+            void Push(const Bluetooth::UUID& value)
+            {
+                uint8_t size = value.Length();
+                while (size-- > 0) {
+                    _buffer[_writerOffset++] = value.Data()[size]; // reverse!
+                }
+            }
+            void Push(use_descriptor_t, const Bluetooth::UUID& value)
+            {
+                _writerOffset += PushDescriptor(&_buffer[_writerOffset], UUID, value.Length());
+                Push(value);
+            }
+            void Push(const string& value)
+            {
+                ::memcpy(&_buffer[_writerOffset], value.data(), value.length()); // no nul-terminator!
+                _writerOffset += value.length();
+            }
+            void Push(use_descriptor_t, const string& value, bool url = false)
+            {
+                _writerOffset += PushDescriptor(&_buffer[_writerOffset], (url? URL : TEXT), value.length());
+                Push(value);
+            }
+            void Push(const bool value)
+            {
+                Push(static_cast<uint8_t>(value));
+            }
+            void Push(use_descriptor_t, const bool value)
+            {
+                _writerOffset += PushDescriptor(&_buffer[_writerOffset], BOOL, 1);
+                Push(value);
+            }
+            template<typename TYPE, /* enable if integer */ typename std::enable_if<std::is_integral<TYPE>::value, int>::type = 0>
+            void Push(const TYPE value)
+            {
+                ASSERT(sizeof(TYPE) <= 4);
+                PushIntegerValue(static_cast<typename std::make_unsigned<TYPE>::type>(value));
+            }
+            template<typename TYPE, /* enable if integer */ typename std::enable_if<std::is_integral<TYPE>::value, int>::type = 0>
+            void Push(use_descriptor_t, const TYPE value)
+            {
+                _writerOffset += PushDescriptor(&_buffer[_writerOffset],
+                                                (std::numeric_limits<TYPE>::is_signed? INT : UINT),
+                                                sizeof(TYPE));
+                Push(value);
+            }
+            template<typename TYPE, /* enable if enum */ typename std::enable_if<std::is_enum<TYPE>::value, int>::type = 0>
+            void Push(const TYPE value)
+            {
+                ASSERT(sizeof(TYPE) <= 4);
+                PushIntegerValue(static_cast<typename std::underlying_type<TYPE>::type>(value));
+            }
+            template<typename TYPE, /* enable if enum */ typename std::enable_if<std::is_enum<TYPE>::value, int>::type = 0>
+            void Push(use_descriptor_t, const TYPE value)
+            {
+                _writerOffset += PushDescriptor(&_buffer[_writerOffset], UINT, sizeof(TYPE));
+                Push(value);
+            }
+            void Push(const Record& sequence)
+            {
+                ::memcpy(&_buffer[_writerOffset], sequence.Data(), sequence.Length());
+                _writerOffset += sequence.Length();
+            }
+            void Push(use_descriptor_t, const Record& sequence, const bool alternative = false)
+            {
+                _writerOffset += PushDescriptor(&_buffer[_writerOffset], (alternative? ALT : SEQ), sequence.Length());
+                Push(sequence);
+            }
+            void Push(const Builder& builder, const uint16_t scratchPadSize = 2048)
+            {
+                uint8_t scratchPad[scratchPadSize];
+                Record sequence(scratchPad, sizeof(scratchPad));
+                builder(sequence);
+                Push(sequence);
+            }
+            void Push(use_descriptor_t, const Builder& builder, const bool alternative = false, const uint16_t scratchPadSize = 2048)
+            {
+                uint8_t scratchPad[scratchPadSize];
+                Record sequence(scratchPad, sizeof(scratchPad));
+                builder(sequence);
+                Push(use_descriptor, sequence, alternative);
+            }
+            template<typename TYPE>
+            void Push(const std::list<TYPE>& list, const uint16_t scratchPadSize = 2048)
+            {
+                Push([&](Record& sequence){
+                    for (auto item : list) {
+                        sequence.Push(item);
+                    }
+                }, scratchPadSize);
+            }
+            template<typename TYPE>
+            void Push(use_descriptor_t, const std::list<TYPE>& list, const bool alternative = false, const uint16_t scratchPadSize = 2048)
+            {
+                Push(use_descriptor, [&](Record& sequence){
+                    for (auto item : list) {
+                        sequence.Push(use_descriptor, item);
+                    }
+                }, alternative, scratchPadSize);
+            }
+
+        public:
+            void Pop(string& value, const uint16_t length) const
+            {
+                value.assign(reinterpret_cast<char*>(&_buffer[_readerOffset]), length);
+                _readerOffset += length;
+            }
+            void Pop(use_descriptor_t, string& value) const
+            {
+                elementtype type;
+                uint32_t length = 0;
+                _readerOffset += PopDescriptor(type, length);
+                if ((type == TEXT) || (type == URL)) {
+                    Pop(value, length);
+                } else {
+                    TRACE_L1(_T("Unexpected descriptor in SDP payload [0x%02x], expected TEXT or URL"), type);
+                }
+            }
+            template<typename TYPE, /* enable if enum */ typename std::enable_if<std::is_enum<TYPE>::value, int>::type = 0>
+            void Pop(use_descriptor_t, TYPE& value)
+            {
+                elementtype type;
+                uint32_t size = 0;
+                _readerOffset += PopDescriptor(type, size);
+                if (type == UINT) {
+                    typename std::underlying_type<TYPE>::type temp;
+                    if (size != sizeof(temp)) {
+                        TRACE_L1(_T("Warning: enum underlying type size does not match!"));
+                    }
+                    Pop(temp);
+                    value = static_cast<TYPE>(temp);
+                } else {
+                    TRACE_L1(_T("Unexpected integer type for enum"));
+                }
+            }
+            template<typename TYPE, /* enable if enum */ typename std::enable_if<std::is_enum<TYPE>::value, int>::type = 0>
+            void Pop(TYPE& value)
+            {
+                ASSERT(sizeof(TYPE) <= 4);
+                typename std::underlying_type<TYPE>::type temp;
+                Pop(temp);
+                value = static_cast<TYPE>(temp);
+            }
+            template<typename TYPE, /* enable if integer */ typename std::enable_if<std::is_integral<TYPE>::value, int>::type = 0>
+            void Pop(TYPE& value) const
+            {
+                PopIntegerValue(value);
+            }
+            template<typename TYPE, /* enable if integer */ typename std::enable_if<std::is_integral<TYPE>::value, int>::type = 0>
+            void Pop(use_descriptor_t, TYPE& value, uint32_t* outSize = nullptr) const
+            {
+                elementtype type;
+                uint32_t size = 0;
+                _readerOffset += PopDescriptor(type, size);
+                if (type == (std::numeric_limits<TYPE>::is_signed? INT : UINT)) {
+                    if (size > sizeof(TYPE)) {
+                        TRACE_L1(_T("Warning: integer value possibly truncated!"));
+                    }
+                    if (size == 1) {
+                        uint8_t val; PopIntegerValue(val); value = val;
+                    } else if (size == 2) {
+                        uint16_t val; PopIntegerValue(val); value = val;
+                    } else if (size == 4) {
+                        uint32_t val; PopIntegerValue(val); value = val;
+                    } else {
+                        TRACE_L1(_T("Unexpected integer size"));
+                    }
+                    if (outSize != nullptr) {
+                        (*outSize) = size;
+                    }
+                } else {
+                    TRACE_L1(_T("Unexpected integer type"));
+                }
+            }
+            template<typename TYPE>
+            void Pop(std::list<TYPE>& list, const uint16_t count) const
+            {
+                uint16_t i = count;
+                while (i-- > 0) {
+                    TYPE item;
+                    Pop(item);
+                    list.push_back(item);
+                }
+            }
+            template<typename TYPE>
+            void Pop(use_descriptor_t, std::list<TYPE>& list, const uint16_t count) const
+            {
+                uint16_t i = count;
+                while (i-- > 0) {
+                    TYPE item;
+                    Pop(use_descriptor, item);
+                    list.push_back(item);
+                }
+            }
+            void Pop(use_descriptor_t, Bluetooth::UUID& uuid) const
+            {
+                uint32_t size = 0;
+                elementtype type;
+                _readerOffset += PopDescriptor(type, size);
+                if (size == 2) {
+                    uuid = Bluetooth::UUID((_buffer[_readerOffset] << 8) | _buffer[_readerOffset + 1]);
+                } else {
+                    uint8_t buffer[size];
+                    uint8_t i = size;
+                    while (i-- > 0) {
+                        buffer[i] = _buffer[_readerOffset++];
+                    }
+                    uuid = Bluetooth::UUID(buffer);
+                }
+                _readerOffset += size;
+            }
+            void Pop(use_descriptor_t, const Inspector& inspector) const
+            {
+                uint32_t size = 0;
+                elementtype type;
+                _readerOffset += PopDescriptor(type, size);
+                if (type == SEQ) {
+                    Record sequence(&_buffer[_readerOffset], size, size);
+                    inspector(sequence);
+                } else {
+                    TRACE_L1(_T("Unexpected descriptor in SDP payload [0x%02x], expected SEQ"), type);
+                }
+                _readerOffset += size;
+            }
+            void Pop(use_descriptor_t, Record& element) const
+            {
+                elementtype elemType;
+                uint32_t elemSize;
+                uint8_t descriptorSize = PopDescriptor(elemType, elemSize);
+                if (Available() >= (descriptorSize + elemSize)) {
+                    element.Assign(&_buffer[_readerOffset], (descriptorSize + elemSize));
+                    _readerOffset += (descriptorSize + elemSize);
+                } else {
+                    TRACE_L1(_T("Truncated SDP payload"));
+                    _readerOffset = _writerOffset;
+                }
+            }
+            void Pop(Record& element, const uint32_t size) const
+            {
+                if (Available() >= size) {
+                    element.Assign(&_buffer[_readerOffset], size);
+                    _readerOffset += size;
+                } else {
+                    TRACE_L1(_T("Truncated SDP payload"));
+                    _readerOffset = _writerOffset;
+                }
+            }
+
+        private:
+            uint8_t PushDescriptor(uint8_t buffer[], const elementtype type, const uint32_t size = 0);
+            uint8_t PopDescriptor(elementtype& type, uint32_t& size) const;
+
+            void PushIntegerValue(const uint8_t value)
+            {
+                _buffer[_writerOffset++] = value;
+            }
+            void PushIntegerValue(const uint16_t value)
+            {
+                _buffer[_writerOffset++] = (value >> 8);
+                _buffer[_writerOffset++] = value;
+            }
+            void PushIntegerValue(const uint32_t value)
+            {
+                _buffer[_writerOffset++] = (value >> 24);
+                _buffer[_writerOffset++] = (value >> 16);
+                _buffer[_writerOffset++] = (value >> 8);
+                _buffer[_writerOffset++] = value;
+            }
+            void PopIntegerValue(uint8_t& value) const
+            {
+                value = _buffer[_readerOffset++];
+            }
+            void PopIntegerValue(uint16_t& value) const
+            {
+                value = ((_buffer[_readerOffset] << 8) | _buffer[_readerOffset + 1]);
+                _readerOffset += 2;
+            }
+            void PopIntegerValue(uint32_t& value) const
+            {
+                value = ((_buffer[_readerOffset] << 24) | (_buffer[_readerOffset + 1] << 16)
+                            | (_buffer[_readerOffset + 2] << 8) | _buffer[_readerOffset + 3]);
+                _readerOffset += 4;
+            }
+
+            private:
+            uint8_t* _buffer;
+            uint32_t _bufferSize;
+            uint32_t _filledSize;
+            mutable uint32_t _readerOffset;
+            uint32_t _writerOffset;
+        }; // class Record
+
         class Command : public Core::IOutbound, public Core::IInbound {
         public:
             class PDU {
             public:
+                static constexpr uint16_t DEFAULT_SCRATCHPAD_SIZE = 4096;
                 static constexpr uint8_t HEADER_SIZE = 5;
-
-                class Serializer {
-                public:
-                    enum elementtype : uint8_t {
-                        NIL = 0x00,
-                        UINT = 0x08,
-                        INT = 0x10,
-                        UUID = 0x18,
-                        TEXT = 0x20,
-                        BOOL = 0x28,
-                        SEQ = 0x30,
-                        ALT = 0x38,
-                        URL = 0x40,
-                    };
-
-                public:
-                    using Builder = std::function<void(Serializer&)>;
-                    using Inspector = std::function<void(const Serializer&)>;
-
-                    enum class Continuation : uint8_t {
-                        ABSENT = 0,
-                        FOLLOWS
-                    };
-
-                public:
-                    Serializer()
-                        : _buffer(nullptr)
-                        , _bufferSize(0)
-                        , _filledSize(0)
-                        , _readerOffset(0)
-                        , _writerOffset(0)
-                    {
-                    }
-                    Serializer(uint8_t buffer[], const uint32_t bufferSize, const uint32_t filledSize = 0)
-                        : _buffer(buffer)
-                        , _bufferSize(bufferSize)
-                        , _filledSize(filledSize)
-                        , _readerOffset(0)
-                        , _writerOffset(filledSize)
-                    {
-                        ASSERT(_buffer != nullptr);
-                        ASSERT(_bufferSize != 0);
-                        ASSERT(_bufferSize >= _filledSize);
-                    }
-
-                    virtual ~Serializer() = default;
-
-                public:
-                    uint32_t Available() const
-                    {
-                        return (_writerOffset > _readerOffset? (_writerOffset - _readerOffset) : 0);
-                    }
-                    uint32_t Length() const
-                    {
-                        return (_writerOffset);
-                    }
-                    const uint8_t* Data() const
-                    {
-                        return (_buffer);
-                    }
-                    void Assign(uint8_t buffer[], const uint32_t bufferSize)
-                    {
-                        _buffer = buffer;
-                        _bufferSize = bufferSize;
-                        _filledSize = bufferSize;
-                        _readerOffset = 0;
-                        _writerOffset = bufferSize;
-                    }
-                    void Clear()
-                    {
-                        _writerOffset = 0;
-                        _readerOffset = 0;
-                        _filledSize = 0;
-                    }
-
-                public:
-                    void Push(const Continuation cont, const string& data = _T(""))
-                    {
-                        if (cont == Continuation::ABSENT) {
-                            Push(static_cast<uint8_t>(0));
-                        } else {
-                            ASSERT(data.length() <= 16)
-                            Push(static_cast<uint8_t>(data.length()));
-                            Push(data);
-                        }
-                    }
-                    void Pop(Continuation& cont, std::string& data) const
-                    {
-                        uint8_t size = 0;
-                        Pop(size);
-                        cont = (size == 0? Continuation::ABSENT : Continuation::FOLLOWS);
-                        if (size != 0) {
-                            Pop(data, size);
-                        } else {
-                            data.clear();
-                        }
-                    }
-
-                public:
-                    void Push(const bool descriptor = false)
-                    {
-                        if (descriptor == true) {
-                            _writerOffset += PushDescriptor(&_buffer[_writerOffset], NIL);
-                        }
-                    }
-                    void Push(const Bluetooth::UUID& value, const bool descriptor = false)
-                    {
-                        if (descriptor == true) {
-                            _writerOffset += PushDescriptor(&_buffer[_writerOffset], UUID, value.Length());
-                        }
-                        uint8_t size = value.Length();
-                        while (size-- > 0) {
-                            _buffer[_writerOffset++] = value.Data()[size]; // reverse!
-                        }
-                    }
-                    void Push(const string& value, const bool descriptor = false, bool url = false)
-                    {
-                        if (descriptor == true) {
-                            _writerOffset += PushDescriptor(&_buffer[_writerOffset], (url? URL : TEXT), value.length());
-                        }
-                        ::memcpy(&_buffer[_writerOffset], value.data(), value.length()); // no nul-terminator!
-                        _writerOffset += value.length();
-                    }
-                    void Push(const bool value, const bool descriptor = false)
-                    {
-                        if (descriptor == true) {
-                            _writerOffset += PushDescriptor(&_buffer[_writerOffset], BOOL, 1);
-                        }
-                        Push(static_cast<uint8_t>(value));
-                    }
-                    template<typename TYPE, /* dummy */ typename std::enable_if<std::is_integral<TYPE>::value, int>::type = 0>
-                    void Push(const TYPE value, const bool descriptor = false)
-                    {
-                        ASSERT(sizeof(TYPE) <= 4);
-                        if (descriptor == true) {
-                            _writerOffset += PushDescriptor(&_buffer[_writerOffset],
-                                                            (std::numeric_limits<TYPE>::is_signed? INT : UINT),
-                                                            sizeof(TYPE));
-                        }
-                        PushIntegerValue(static_cast<typename std::make_unsigned<TYPE>::type>(value));
-                    }
-                    template<typename TYPE, /* dummy */ typename std::enable_if<std::is_enum<TYPE>::value, int>::type = 0>
-                    void Push(const TYPE value, const bool descriptor = false)
-                    {
-                        ASSERT(sizeof(TYPE) <= 4);
-                        if (descriptor == true) {
-                            _writerOffset += PushDescriptor(&_buffer[_writerOffset], UINT, sizeof(TYPE));
-                        }
-                        PushIntegerValue(static_cast<typename std::underlying_type<TYPE>::type>(value));
-                    }
-                    void Push(const Serializer& sequence, const bool descriptor = false, const bool alternative = false)
-                    {
-                        if (descriptor == true) {
-                            _writerOffset += PushDescriptor(&_buffer[_writerOffset], (alternative? ALT : SEQ), sequence.Length());
-                        }
-                        ::memcpy(&_buffer[_writerOffset], sequence.Data(), sequence.Length());
-                        _writerOffset += sequence.Length();
-                    }
-                    void Push(const Builder& builder, const bool descriptor = false, const bool alternative = false,
-                              const uint16_t scratchPadSize = 2048)
-                    {
-                        uint8_t scratchPad[scratchPadSize];
-                        Serializer sequence(scratchPad, sizeof(scratchPad));
-                        builder(sequence);
-                        Push(sequence, descriptor, alternative);
-                    }
-                    template<typename TYPE>
-                    void Push(const std::list<TYPE>& list, const bool descriptor = false, const bool alternative = false,
-                              const uint16_t scratchPadSize = 2048)
-                    {
-                        Push([&](Serializer& sequence){
-                            for (auto item : list) {
-                                sequence.Push(item, descriptor);
-                            }
-                        }, descriptor, alternative, scratchPadSize);
-                    }
-
-                public:
-                    void Pop(string& value, const uint16_t length) const
-                    {
-                        value.assign(reinterpret_cast<char*>(&_buffer[_readerOffset]), length);
-                        _readerOffset += length;
-                    }
-                    template<typename TYPE, /* dummy */ typename std::enable_if<std::is_enum<TYPE>::value, int>::type = 0>
-                    void Pop(TYPE& value)
-                    {
-                        ASSERT(sizeof(TYPE) <= 4);
-                        typename std::underlying_type<TYPE>::type temp;
-                        Pop(temp);
-                        value = static_cast<TYPE>(temp);
-                    }
-                    template<typename TYPE, /* dummy */ typename std::enable_if<std::is_integral<TYPE>::value, int>::type = 0>
-                    void Pop(TYPE& value, const uint32_t descriptor = false, uint32_t* outSize = nullptr) const
-                    {
-                        if (descriptor == true) {
-                            elementtype type;
-                            uint32_t size = 0;
-                            _readerOffset += PopDescriptor(type, size);
-                            if (type == UINT) {
-                                if (size > sizeof(TYPE)) {
-                                    TRACE_L1(_T("Warning: integer value possibly truncated!"));
-                                }
-                                if (size == 1) {
-                                    uint8_t val; PopIntegerValue(val); value = val;
-                                } else if (size == 2) {
-                                    uint16_t val; PopIntegerValue(val); value = val;
-                                } else if (size == 4) {
-                                    uint32_t val; PopIntegerValue(val); value = val;
-                                } else {
-                                    TRACE_L1(_T("Unexpected integer size"));
-                                }
-                                if (outSize != nullptr) {
-                                    (*outSize) = size;
-                                }
-                            } else {
-                                TRACE_L1(_T("Unexpected integer type"));
-                            }
-                        } else {
-                            PopIntegerValue(value);
-                            if (outSize != nullptr) {
-                                (*outSize) = sizeof(TYPE);
-                            }
-                        }
-                    }
-                    template<typename TYPE>
-                    void Pop(std::list<TYPE>& list, const uint16_t count) const
-                    {
-                        uint16_t i = count;
-                        while (i-- > 0) {
-                            TYPE item;
-                            Pop(item);
-                            list.push_back(item);
-                        }
-                    }
-                    void Pop(Bluetooth::UUID& uuid) const
-                    {
-                        uint32_t size = 0;
-                        elementtype type;
-                        _readerOffset += PopDescriptor(type, size);
-                        if (size == 2) {
-                            uuid = Bluetooth::UUID((_buffer[_readerOffset] << 8) | _buffer[_readerOffset + 1]);
-                        } else {
-                            uint8_t buffer[size];
-                            uint8_t i = size;
-                            while (i-- > 0) {
-                                buffer[i] = _buffer[_readerOffset++];
-                            }
-                            uuid = Bluetooth::UUID(buffer);
-                        }
-                        _readerOffset += size;
-                    }
-                    void Pop(const Inspector& inspector) const
-                    {
-                        uint32_t size = 0;
-                        elementtype type;
-                        _readerOffset += PopDescriptor(type, size);
-                        if (type == SEQ) {
-                            Serializer sequence(&_buffer[_readerOffset], size, size);
-                            inspector(sequence);
-                        } else {
-                            TRACE_L1(_T("Unexpected descriptor in SDP payload [0x%02x], expected SEQ"), type);
-                        }
-                        _readerOffset += size;
-                    }
-                    void Pop(Serializer& element) const
-                    {
-                        elementtype elemType;
-                        uint32_t elemSize;
-                        uint8_t descriptorSize = PopDescriptor(elemType, elemSize);
-                        if (Available() >= (descriptorSize + elemSize)) {
-                            element.Assign(&_buffer[_readerOffset], (descriptorSize + elemSize));
-                            _readerOffset += (descriptorSize + elemSize);
-                        } else {
-                            TRACE_L1(_T("Truncated SDP payload"));
-                            _readerOffset = _writerOffset;
-                        }
-                    }
-                    void Pop(Serializer& element, const uint32_t size) const
-                    {
-                        if (Available() >= size) {
-                            element.Assign(&_buffer[_readerOffset], size);
-                            _readerOffset += size;
-                        } else {
-                            TRACE_L1(_T("Truncated SDP payload"));
-                            _readerOffset = _writerOffset;
-                        }
-                    }
-
-                private:
-                    uint8_t PushDescriptor(uint8_t buffer[], const elementtype type, const uint32_t size = 0);
-                    uint8_t PopDescriptor(elementtype& type, uint32_t& size) const;
-
-                    void PushIntegerValue(const uint8_t value)
-                    {
-                        _buffer[_writerOffset++] = value;
-                    }
-                    void PushIntegerValue(const uint16_t value)
-                    {
-                        _buffer[_writerOffset++] = (value >> 8);
-                        _buffer[_writerOffset++] = value;
-                    }
-                    void PushIntegerValue(const uint32_t value)
-                    {
-                        _buffer[_writerOffset++] = (value >> 24);
-                        _buffer[_writerOffset++] = (value >> 16);
-                        _buffer[_writerOffset++] = (value >> 8);
-                        _buffer[_writerOffset++] = value;
-                    }
-                    void PopIntegerValue(uint8_t& value) const
-                    {
-                        value = _buffer[_readerOffset++];
-                    }
-                    void PopIntegerValue(uint16_t& value) const
-                    {
-                        value = ((_buffer[_readerOffset] << 8) | _buffer[_readerOffset + 1]);
-                        _readerOffset += 2;
-                    }
-                    void PopIntegerValue(uint32_t& value) const
-                    {
-                        value = ((_buffer[_readerOffset] << 24) | (_buffer[_readerOffset + 1] << 16)
-                                    | (_buffer[_readerOffset + 2] << 8) | _buffer[_readerOffset + 3]);
-                        _readerOffset += 4;
-                    }
-
-                   private:
-                    uint8_t* _buffer;
-                    uint32_t _bufferSize;
-                    uint32_t _filledSize;
-                    mutable uint32_t _readerOffset;
-                    uint32_t _writerOffset;
-                }; // class Serializer
+                static constexpr uint8_t MAX_CONTINUATION_INFO_SIZE = 16;
 
             public:
                 enum pdutype : uint8_t {
@@ -427,7 +518,9 @@ namespace Bluetooth {
                 };
 
             public:
-                PDU(const uint32_t bufferSize = 4096)
+                static constexpr uint16_t MIN_BUFFER_SIZE = (HEADER_SIZE + 1 + MAX_CONTINUATION_INFO_SIZE);
+
+                explicit PDU(const uint16_t bufferSize)
                     : _bufferSize(bufferSize)
                     , _buffer(static_cast<uint8_t*>(::malloc(_bufferSize)))
                     , _size(0)
@@ -436,6 +529,7 @@ namespace Bluetooth {
                     , _payloadSize(0)
                 {
                     ASSERT(_buffer != nullptr);
+                    ASSERT(_bufferSize > MIN_BUFFER_SIZE);
                 }
                 ~PDU()
                 {
@@ -447,18 +541,22 @@ namespace Bluetooth {
             public:
                 void Clear()
                 {
-                    ::memset(_buffer, 0, PDU::HEADER_SIZE);
+                    ::memset(_buffer, 0, HEADER_SIZE);
                     _size = 0;
                     _continuationOffset = 0;
                     _payloadSize = 0;
                 }
                 bool IsValid() const
                 {
-                    return ((_buffer != nullptr) && (_bufferSize > PDU::HEADER_SIZE) && (Type() != Invalid));
+                    return ((_buffer != nullptr) && (_bufferSize > MIN_BUFFER_SIZE) && (Type() != Invalid));
                 }
                 uint32_t Length() const
                 {
                     return (_size);
+                }
+                uint16_t Capacity() const
+                {
+                    return (_bufferSize - MIN_BUFFER_SIZE);
                 }
                 const uint8_t* Data() const
                 {
@@ -475,8 +573,8 @@ namespace Bluetooth {
                 void Finalize(const string& continuation = "")
                 {
                     // Called during command construction or by retrigger due to continuation
-                    ASSERT(_size >= PDU::HEADER_SIZE);
-                    ASSERT(_continuationOffset >= PDU::HEADER_SIZE);
+                    ASSERT(_size >= HEADER_SIZE);
+                    ASSERT(_continuationOffset >= HEADER_SIZE);
 
                     // Increment transaction ID
                     _transactionId++;
@@ -491,21 +589,20 @@ namespace Bluetooth {
                     // Attach continuation information
                     _buffer[_continuationOffset] = continuation.size();
                     ::memcpy(_buffer + _continuationOffset + 1, continuation.data(), continuation.size());
-                    _size = (PDU::HEADER_SIZE + payloadSize);
+                    _size = (HEADER_SIZE + payloadSize);
                 }
-                void Construct(const PDU::pdutype type, const Serializer& parameters)
+                void Construct(const pdutype type, const Record& parameters)
                 {
-                    const uint32_t maxPacketSize = (PDU::HEADER_SIZE + parameters.Length() + 1 + 16 /* continuation */);
-                    ASSERT(_bufferSize >= maxPacketSize);
+                    ASSERT(Capacity() >= (parameters.Length() + MIN_BUFFER_SIZE));
 
                     Clear();
 
-                    if (_bufferSize >= maxPacketSize) {
-                        ::memset(_buffer, 0, PDU::HEADER_SIZE);
-                        ::memcpy(_buffer + PDU::HEADER_SIZE, parameters.Data(), parameters.Length());
+                    if (Capacity() >= (parameters.Length() + MIN_BUFFER_SIZE)) {
+                        ::memset(_buffer, 0, HEADER_SIZE);
+                        ::memcpy(_buffer + HEADER_SIZE, parameters.Data(), parameters.Length());
                         _buffer[0] = type;
                         _payloadSize = parameters.Length();
-                        _size = (PDU::HEADER_SIZE + _payloadSize);
+                        _size = (HEADER_SIZE + _payloadSize);
                         _continuationOffset = _size;
 
                         Finalize();
@@ -513,18 +610,18 @@ namespace Bluetooth {
                         TRACE(Trace::Error, (_T("Parameters to large to fit in PDU [%d]"), parameters.Length()));
                     }
                 }
-                void Construct(const PDU::pdutype type, const Serializer::Builder& builder, const uint32_t scratchPadSize = 2048)
+                void Construct(const pdutype type, const Record::Builder& builder, const uint32_t scratchPadSize = DEFAULT_SCRATCHPAD_SIZE)
                 {
                     uint8_t scratchPad[scratchPadSize];
-                    Serializer parameters(scratchPad, sizeof(scratchPad));
+                    Record parameters(scratchPad, sizeof(scratchPad));
                     builder(parameters);
                     Construct(type, parameters);
                 }
 
             private:
-                uint32_t _bufferSize;
+                uint16_t _bufferSize;
                 uint8_t* _buffer;
-                uint32_t _size;
+                uint16_t _size;
                 uint16_t _transactionId;
                 uint16_t _continuationOffset;
                 uint16_t _payloadSize;
@@ -534,8 +631,8 @@ namespace Bluetooth {
             public:
                 Request(const Request&) = delete;
                 Request& operator=(const Request&) = delete;
-                Request()
-                    : _pdu()
+                explicit Request(uint16_t pduBufferSize)
+                    : _pdu(pduBufferSize)
                     , _offset(0)
                 {
                 }
@@ -576,8 +673,8 @@ namespace Bluetooth {
                 {
                     ASSERT(services.size() <= 12); // As per spec
 
-                    _pdu.Construct(PDU::ServiceSearchRequest, [&](PDU::Serializer& parameters) {
-                        parameters.Push(services, true);
+                    _pdu.Construct(PDU::ServiceSearchRequest, [&](Record& parameters) {
+                        parameters.Push(use_descriptor, services);
                         parameters.Push(maxResults);
                     });
                 }
@@ -585,10 +682,10 @@ namespace Bluetooth {
                 {
                     ASSERT(attributeIdRanges.size() <= 256);
 
-                    _pdu.Construct(PDU::ServiceAttributeRequest, [&](PDU::Serializer& parameters) {
+                    _pdu.Construct(PDU::ServiceAttributeRequest, [&](Record& parameters) {
                         parameters.Push(serviceHandle);
-                        parameters.Push(static_cast<uint16_t>(0xFFFFF - PDU::HEADER_SIZE));
-                        parameters.Push(attributeIdRanges, true);
+                        parameters.Push(_pdu.Capacity());
+                        parameters.Push(use_descriptor, attributeIdRanges);
                     });
                 }
                 void ServiceSearchAttribute(const std::list<UUID>& services, const std::list<uint32_t>& attributeIdRanges)
@@ -596,10 +693,10 @@ namespace Bluetooth {
                     ASSERT(services.size() <= 12);
                     ASSERT(attributeIdRanges.size() <= 256);
 
-                    _pdu.Construct(PDU::ServiceSearchAttributeRequest, [&](PDU::Serializer& parameters) {
-                        parameters.Push(services, true);
-                        parameters.Push(static_cast<uint16_t>(0xFFFFF - PDU::HEADER_SIZE));
-                        parameters.Push(attributeIdRanges, true);
+                    _pdu.Construct(PDU::ServiceSearchAttributeRequest, [&](Record& parameters) {
+                        parameters.Push(use_descriptor, services);
+                        parameters.Push(_pdu.Capacity());
+                        parameters.Push(use_descriptor, attributeIdRanges);
                     });
                 }
 
@@ -614,16 +711,22 @@ namespace Bluetooth {
                 Response(const Response&) = delete;
                 Response& operator=(const Response&) = delete;
 
-                typedef std::pair<uint16_t, std::pair<uint16_t, uint16_t> > Entry;
+                typedef std::pair<uint16_t, std::pair<uint16_t, uint16_t>> Entry;
 
             public:
-                Response()
+                explicit Response(uint32_t payloadSize)
                     : _type(PDU::Invalid)
                     , _status(PDU::Reserved)
-                    , _payload(new uint8_t[2048], 2048)
+                    , _scratchPad(static_cast<uint8_t*>(::malloc(payloadSize)))
+                    , _payload(_scratchPad, payloadSize)
                 {
                 }
-                ~Response() = default;
+                ~Response()
+                {
+                    if (_scratchPad != nullptr) {
+                        ::free(_scratchPad);
+                    }
+                }
 
             public:
                 void Clear()
@@ -647,7 +750,7 @@ namespace Bluetooth {
                 {
                     return (_handles);
                 }
-                const std::map<uint16_t, string>& Attributes() const
+                const std::map<uint16_t, Record>& Attributes() const
                 {
                     return (_attributes);
                 }
@@ -659,15 +762,16 @@ namespace Bluetooth {
                 uint16_t Deserialize(const uint16_t reqTransactionId, const uint8_t stream[], const uint16_t length);
 
             private:
-                PDU::errorid DeserializeServiceSearchResponse(const PDU::Serializer& params);
-                PDU::errorid DeserializeServiceAttributeResponse(const PDU::Serializer& params);
+                PDU::errorid DeserializeServiceSearchResponse(const Record& params);
+                PDU::errorid DeserializeServiceAttributeResponse(const Record& params);
 
             private:
                 PDU::pdutype _type;
                 PDU::errorid _status;
                 std::list<uint32_t> _handles;
-                std::map<uint16_t, string> _attributes;
-                PDU::Serializer _payload;
+                std::map<uint16_t, Record> _attributes;
+                uint8_t* _scratchPad;
+                Record _payload;
                 string _continuationData;
             }; // class Response
 
@@ -676,8 +780,8 @@ namespace Bluetooth {
             Command& operator=(const Command&) = delete;
             Command()
                 : _status(~0)
-                , _request()
-                , _response()
+                , _request(/* PDU buffer size */ PDU::MIN_BUFFER_SIZE + PDU::DEFAULT_SCRATCHPAD_SIZE)
+                , _response(/* receive payload buffer size */ 8192)
             {
             }
             ~Command() = default;
@@ -685,9 +789,7 @@ namespace Bluetooth {
         public:
             void ServiceSearch(const UUID& serviceId, const uint16_t maxResults = 256) // single
             {
-                _response.Clear();
-                _status = ~0;
-                _request.ServiceSearch(std::list<UUID>{serviceId}, maxResults);
+                ServiceSearch(std::list<UUID>{serviceId}, maxResults);
             }
             void ServiceSearch(const std::list<UUID>& services, const uint16_t maxResults = 256) // list
             {
@@ -697,15 +799,11 @@ namespace Bluetooth {
             }
             void ServiceAttribute(const uint32_t serviceHandle) // all
             {
-                _response.Clear();
-                _status = ~0;
-                _request.ServiceAttribute(serviceHandle, std::list<uint32_t>{0x0000FFFF});
+                ServiceAttribute(serviceHandle, std::list<uint32_t>{0x0000FFFF});
             }
             void ServiceAttribute(const uint32_t serviceHandle, const uint16_t attributeId) // single
             {
-                _response.Clear();
-                _status = ~0;
-                _request.ServiceAttribute(serviceHandle, std::list<uint32_t>{(static_cast<uint32_t>(attributeId) << 16) | attributeId});
+                ServiceAttribute(serviceHandle, std::list<uint32_t>{(static_cast<uint32_t>(attributeId) << 16) | attributeId});
             }
             void ServiceAttribute(const uint32_t serviceHandle, const std::list<uint32_t>& attributeIdRanges) // ranges
             {
