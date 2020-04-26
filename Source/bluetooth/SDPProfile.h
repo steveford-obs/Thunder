@@ -444,9 +444,15 @@ namespace Bluetooth {
     private:
         void ServiceSearchFinished(const SDPSocket::Command::Response& response)
         {
+            _services.clear();
+
             if (response.Handles().empty() == false) {
                 for (uint32_t const& handle : response.Handles()) {
-                    _services.emplace_back(handle);
+                    if (std::find_if(_services.begin(), _services.end(), [handle](const Service& service) { return (service.Handle() == handle); }) == _services.end()) {
+                        _services.emplace_back(handle);
+                    } else {
+                        TRACE_L1(_T("Service handle 0x%08x already exists"), handle);
+                    }
                 }
 
                 _servicesIterator = _services.begin();

@@ -235,7 +235,7 @@ namespace Bluetooth {
 
                 _payload.Pop(use_descriptor, [&](const Record& sequence) {
                     while (sequence.Available() > 2) {
-                        uint32_t attribute;
+                        uint32_t attribute = 0;
                         Record value;
 
                         // Pick up the pair and store it.
