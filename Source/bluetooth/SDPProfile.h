@@ -195,7 +195,7 @@ namespace Bluetooth {
         class ProfileDescriptor : public ClassID {
             // Describes a profile the service conforms to.
         public:
-            ProfileDescriptor(const UUID& id, const uint16_t version = 0x0100)
+            ProfileDescriptor(const UUID& id, const uint16_t version)
                 : ClassID(id)
                 , _version(version)
             {
@@ -260,6 +260,11 @@ namespace Bluetooth {
                     IconURL                         = 0x000c
                 };
 
+                // LanguageBaseAttributeIDList value plus these offsets will yield an appropriate field
+                static constexpr uint8_t OFFSET_ServiceName        = 0x00;
+                static constexpr uint8_t OFFSET_ServiceDescription = 0x01;
+                static constexpr uint8_t OFFSET_ProviderName       = 0x02;
+
             public:
                 AttributeDescriptor(const uint16_t id, const SDPSocket::Record& value)
                     : _id(id)
@@ -282,6 +287,51 @@ namespace Bluetooth {
                 SDPSocket::Record _value;
             }; // class AttributeDescriptor
 
+            struct Metadata {
+            public:
+                static constexpr uint8_t CHARSET_ASCII = 3;
+                static constexpr uint8_t CHARSET_UTF8 = 106;
+
+                Metadata(const uint16_t language, const uint16_t charset, const string& name, const string& description, const string& provider)
+                    : _language(string{ static_cast<const char>(language >> 8), static_cast<const char>(language & 0xFF) })
+                    , _charset(charset)
+                    , _name(name)
+                    , _description(description)
+                    , _provider(provider)
+                {
+                }
+                ~Metadata() = default;
+
+            public:
+                const string& Language() const
+                {
+                    return (_language);
+                }
+                const uint16_t Charset() const
+                {
+                    return (_charset);
+                }
+                const string& Name() const
+                {
+                    return (_name);
+                }
+                const string& Description() const
+                {
+                    return (_description);
+                }
+                const string& Provider() const
+                {
+                    return (_description);
+                }
+
+            private:
+                string _language; // as per ISO639-1, e.g. "en", "fr", etc..
+                uint16_t _charset; // as per iana.org
+                string _name;
+                string _description;
+                string _provider;
+            }; // class Metadata
+
         public:
             Service(const uint32_t handle)
                 : _handle(handle)
@@ -289,6 +339,7 @@ namespace Bluetooth {
                 , _classes()
                 , _profiles()
                 , _protocols()
+                , _metadatas()
             {
             }
             ~Service() = default;
@@ -309,6 +360,10 @@ namespace Bluetooth {
             const std::list<ProtocolDescriptor>& Protocols() const
             {
                 return (_protocols);
+            }
+            const std::list<Metadata>& Metadatas() const
+            {
+                return (_metadatas);
             }
 
         public:
@@ -335,54 +390,11 @@ namespace Bluetooth {
         private:
             void AddAttribute(const uint16_t id, const SDPSocket::Record& value)
             {
-                // Lets deserialize some of the universal attributes...
-                switch (static_cast<AttributeDescriptor::id>(id)) {
-                case AttributeDescriptor::ServiceRecordHandle:
-                    value.Pop(SDPSocket::use_descriptor, _handle);
-                    break;
-                case AttributeDescriptor::id::ServiceClassIDList:
-                    value.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& sequence) {
-                        while (sequence.Available()) {
-                            UUID uuid;
-                            sequence.Pop(SDPSocket::use_descriptor, uuid);
-                            _classes.emplace_back(uuid);
-                        }
-                    });
-                    break;
-                case AttributeDescriptor::BluetoothProfileDescriptorList:
-                    value.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& sequence) {
-                        while (sequence.Available()) {
-                            sequence.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& descriptor) {
-                                UUID uuid;
-                                uint16_t version;
-                                descriptor.Pop(SDPSocket::use_descriptor, uuid);
-                                descriptor.Pop(SDPSocket::use_descriptor, version);
-                                _profiles.emplace_back(uuid, version);
-                            });
-                        }
-                    });
-                    break;
-                case AttributeDescriptor::ProtocolDescriptorList:
-                    value.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& sequence) {
-                        while (sequence.Available()) {
-                            sequence.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& descriptor) {
-                                UUID uuid;
-                                SDPSocket::Record params;
-                                descriptor.Pop(SDPSocket::use_descriptor, uuid);
-                                descriptor.Pop(SDPSocket::use_descriptor, params);
-                                _protocols.emplace_back(uuid, params);
-                            });
-                        }
-                    });
-                    break;
-                default:
-                    break;
-                }
-
                 _attributes.emplace(std::piecewise_construct,
                                     std::forward_as_tuple(id),
                                     std::forward_as_tuple(id, value));
             }
+            void DeserializeAttributes();
 
         private:
             uint32_t _handle;
@@ -390,6 +402,7 @@ namespace Bluetooth {
             std::list<ClassDescriptor> _classes;
             std::list<ProfileDescriptor> _profiles;
             std::list<ProtocolDescriptor> _protocols;
+            std::list<Metadata> _metadatas;
         }; // class Service
 
     public:

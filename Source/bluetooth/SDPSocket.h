@@ -493,7 +493,7 @@ namespace Bluetooth {
                 static constexpr uint8_t MAX_CONTINUATION_INFO_SIZE = 16;
 
             public:
-                enum pdutype : uint8_t {
+                enum pduid : uint8_t {
                     Invalid = 0,
                     ErrorResponse = 1,
                     ServiceSearchRequest = 2,
@@ -562,9 +562,9 @@ namespace Bluetooth {
                 {
                     return (_buffer);
                 }
-                pdutype Type() const
+                pduid Type() const
                 {
-                    return (static_cast<pdutype>(_buffer[0]));
+                    return (static_cast<pduid>(_buffer[0]));
                 }
                 uint16_t TransactionId() const
                 {
@@ -591,7 +591,7 @@ namespace Bluetooth {
                     ::memcpy(_buffer + _continuationOffset + 1, continuation.data(), continuation.size());
                     _size = (HEADER_SIZE + payloadSize);
                 }
-                void Construct(const pdutype type, const Record& parameters)
+                void Construct(const pduid type, const Record& parameters)
                 {
                     ASSERT(Capacity() >= (parameters.Length() + MIN_BUFFER_SIZE));
 
@@ -610,7 +610,7 @@ namespace Bluetooth {
                         TRACE(Trace::Error, (_T("Parameters to large to fit in PDU [%d]"), parameters.Length()));
                     }
                 }
-                void Construct(const pdutype type, const Record::Builder& builder, const uint32_t scratchPadSize = DEFAULT_SCRATCHPAD_SIZE)
+                void Construct(const pduid type, const Record::Builder& builder, const uint32_t scratchPadSize = DEFAULT_SCRATCHPAD_SIZE)
                 {
                     uint8_t scratchPad[scratchPadSize];
                     Record parameters(scratchPad, sizeof(scratchPad));
@@ -738,7 +738,7 @@ namespace Bluetooth {
                     _continuationData.clear();
                     _payload.Clear();
                 }
-                PDU::pdutype Type() const
+                PDU::pduid Type() const
                 {
                     return (_type);
                 }
@@ -766,7 +766,7 @@ namespace Bluetooth {
                 PDU::errorid DeserializeServiceAttributeResponse(const Record& params);
 
             private:
-                PDU::pdutype _type;
+                PDU::pduid _type;
                 PDU::errorid _status;
                 std::list<uint32_t> _handles;
                 std::map<uint16_t, Record> _attributes;

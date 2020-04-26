@@ -128,4 +128,93 @@ ENUM_CONVERSION_BEGIN(Bluetooth::SDPProfile::ClassID::id)
     { Bluetooth::SDPProfile::ClassID::HDPSink,                          _TXT("HDP Sink (HDP)") },
 ENUM_CONVERSION_END(Bluetooth::SDPProfile::ClassID::id)
 
+namespace Bluetooth {
+
+    void SDPProfile::Service::DeserializeAttributes()
+    {
+        for (auto const& attr : _attributes) {
+            const uint16_t& id = attr.first;
+            const SDPSocket::Record& value = attr.second.Value();
+
+            // Lets deserialize some of the universal attributes...
+            switch (static_cast<AttributeDescriptor::id>(id)) {
+            case AttributeDescriptor::ServiceRecordHandle:
+                value.Pop(SDPSocket::use_descriptor, _handle);
+                break;
+            case AttributeDescriptor::id::ServiceClassIDList:
+                value.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& sequence) {
+                    while (sequence.Available()) {
+                        UUID uuid;
+                        sequence.Pop(SDPSocket::use_descriptor, uuid);
+                        _classes.emplace_back(uuid);
+                    }
+                });
+                break;
+            case AttributeDescriptor::BluetoothProfileDescriptorList:
+                value.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& sequence) {
+                    while (sequence.Available()) {
+                        sequence.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& descriptor) {
+                            UUID uuid;
+                            uint16_t version = 0;
+                            descriptor.Pop(SDPSocket::use_descriptor, uuid);
+                            descriptor.Pop(SDPSocket::use_descriptor, version);
+                            _profiles.emplace_back(uuid, version);
+                        });
+                    }
+                });
+                break;
+            case AttributeDescriptor::ProtocolDescriptorList:
+                value.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& sequence) {
+                    while (sequence.Available()) {
+                        sequence.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& descriptor) {
+                            UUID uuid;
+                            SDPSocket::Record params;
+                            descriptor.Pop(SDPSocket::use_descriptor, uuid);
+                            descriptor.Pop(SDPSocket::use_descriptor, params);
+                            _protocols.emplace_back(uuid, params);
+                        });
+                    }
+                });
+                break;
+            case AttributeDescriptor::LanguageBaseAttributeIDList:
+                value.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& sequence) {
+                    while (sequence.Available()) {
+                        sequence.Pop(SDPSocket::use_descriptor, [&](const SDPSocket::Record& descriptor) {
+                            uint16_t lang = 0;
+                            uint16_t charset = 0;
+                            uint16_t base = 0;
+                            descriptor.Pop(lang);
+                            descriptor.Pop(charset);
+                            descriptor.Pop(base);
+                            auto nameIt = _attributes.find(base + AttributeDescriptor::OFFSET_ServiceName);
+                            auto descIt = _attributes.find(base + AttributeDescriptor::OFFSET_ServiceDescription);
+                            auto providerIt = _attributes.find(base + AttributeDescriptor::OFFSET_ProviderName);
+                            string name;
+                            string desc;
+                            string provider;
+                            if (nameIt != _attributes.end()) {
+                                SDPSocket::Record str((*nameIt).second.Value());
+                                str.Pop(SDPSocket::use_descriptor, name);
+                            }
+                            if (descIt != _attributes.end()) {
+                                SDPSocket::Record str((*descIt).second.Value());
+                                str.Pop(SDPSocket::use_descriptor, desc);
+                            }
+                            if (providerIt != _attributes.end()) {
+                                SDPSocket::Record str((*providerIt).second.Value());
+                                str.Pop(SDPSocket::use_descriptor, provider);
+                            }
+                            _metadatas.emplace_back(lang, charset, name, desc, provider);
+                        });
+                    }
+                });
+                break;
+            default:
+                break;
+            }
+        }
+    }
+
+}
+
 }
