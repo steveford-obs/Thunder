@@ -27,12 +27,22 @@ namespace Exchange {
 
     // @json
     struct IBluetoothAudioSink : virtual public Core::IUnknown {
-        enum { ID = ID_BLUETOOTHAUDIOSINK};
+        enum { ID = ID_BLUETOOTHAUDIOSINK };
+
+        enum status {
+            UNASSIGNED,
+            DISCONNECTED,
+            IDLE,
+            OPEN,
+            STREAMING
+        };
 
         virtual ~IBluetoothAudioSink() {}
 
         virtual uint32_t Assign(const string& address) = 0;
         virtual uint32_t Revoke(const string& address) = 0;
+
+        virtual uint32_t Status(status& sinkStatus /* @out */) const = 0;
     };
 
 }
