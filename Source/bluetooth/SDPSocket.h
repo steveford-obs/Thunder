@@ -23,8 +23,7 @@
 #include "UUID.h"
 
 #include <limits>
-#include <stack>
-
+#include <type_traits>
 
 namespace WPEFramework {
 
@@ -250,10 +249,10 @@ namespace Bluetooth {
                 _writerOffset += PushDescriptor(&_buffer[_writerOffset], UINT, sizeof(TYPE));
                 Push(value);
             }
-            void Push(const Record& sequence)
+            void Push(const Record& element)
             {
-                ::memcpy(&_buffer[_writerOffset], sequence.Data(), sequence.Length());
-                _writerOffset += sequence.Length();
+                ::memcpy(&_buffer[_writerOffset], element.Data(), element.Length());
+                _writerOffset += element.Length();
             }
             void Push(use_descriptor_t, const Record& sequence, const bool alternative = false)
             {

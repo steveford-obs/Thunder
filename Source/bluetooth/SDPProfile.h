@@ -277,6 +277,12 @@ namespace Bluetooth {
                 {
                     return (_id);
                 }
+                const string Name() const
+                {
+                    Core::EnumerateType<id> value(_id);
+                    string name = (value.IsSet() == true? string(value.Data()) : "<custom>");
+                    return (name);
+                }
                 const SDPSocket::Record& Value() const
                 {
                     return (_value);
@@ -360,6 +366,10 @@ namespace Bluetooth {
             const std::list<ProtocolDescriptor>& Protocols() const
             {
                 return (_protocols);
+            }
+            const std::map<uint16_t, AttributeDescriptor>& Attributes() const
+            {
+                return (_attributes);
             }
             const std::list<Metadata>& Metadatas() const
             {
@@ -500,6 +510,8 @@ namespace Bluetooth {
             for (auto const& attr : response.Attributes()) {
                 (*_servicesIterator).AddAttribute(attr.first, attr.second);
             }
+
+            (*_servicesIterator).DeserializeAttributes();
 
             _servicesIterator++;
             RetrieveAttributes();

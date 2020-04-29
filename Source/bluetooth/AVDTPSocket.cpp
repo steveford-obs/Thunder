@@ -16,17 +16,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-#include "IDriver.h"
-#include "HCISocket.h"
-#include "GATTSocket.h"
-#include "SDPSocket.h"
-#include "SDPProfile.h"
+#include "Module.h"
 #include "AVDTPSocket.h"
-#include "AVDTPProfile.h"
-#include "Profile.h"
 
-#ifdef __WINDOWS__
-#pragma comment(lib, "bluetooth.lib")
-#endif
+namespace WPEFramework {
+
+namespace Bluetooth {
+
+
+} // namespace Bluetooth
+
+}

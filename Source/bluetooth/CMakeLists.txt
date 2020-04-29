@@ -26,6 +26,8 @@ add_library(${TARGET} SHARED
         GATTSocket.cpp
         SDPSocket.cpp
         SDPProfile.cpp
+        AVDTPSocket.cpp
+        AVDTPProfile.cpp
         Profile.cpp
         UUID.cpp
         Definitions.cpp
@@ -38,8 +40,10 @@ set(PUBLIC_HEADERS
         SDPSocket.h
         SDPProfile.h
         AVDTPSocket.h
+        AVDTPProfile.h
         Profile.h
         UUID.h
+        Record.h
         Module.h
         bluetooth.h
         )

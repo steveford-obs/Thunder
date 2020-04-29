@@ -18,7 +18,6 @@
  */
 
 #include "Module.h"
-
 #include "SDPProfile.h"
 
 namespace WPEFramework {
@@ -127,6 +126,22 @@ ENUM_CONVERSION_BEGIN(Bluetooth::SDPProfile::ClassID::id)
     { Bluetooth::SDPProfile::ClassID::HDPSource,                        _TXT("HDP Source (HDP)") },
     { Bluetooth::SDPProfile::ClassID::HDPSink,                          _TXT("HDP Sink (HDP)") },
 ENUM_CONVERSION_END(Bluetooth::SDPProfile::ClassID::id)
+
+ENUM_CONVERSION_BEGIN(Bluetooth::SDPProfile::Service::AttributeDescriptor::id)
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::ServiceRecordHandle,             _TXT("ServiceRecordHandle") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::ServiceClassIDList,              _TXT("ServiceClassIDList") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::ServiceRecordState,              _TXT("ServiceRecordState") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::ServiceID,                       _TXT("ServiceID") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::ProtocolDescriptorList,          _TXT("ProtocolDescriptorList") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::BrowseGroupList,                 _TXT("BrowseGroupList") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::LanguageBaseAttributeIDList,     _TXT("LanguageBaseAttributeIDList") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::ServiceInfoTimeToLive,           _TXT("ServiceInfoTimeToLive") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::ServiceAvailability,             _TXT("ServiceAvailability") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::BluetoothProfileDescriptorList,  _TXT("BluetoothProfileDescriptorList") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::DocumentationURL,                _TXT("DocumentationURL") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::ClientExecutableURL,             _TXT("ClientExecutableURL") },
+    { Bluetooth::SDPProfile::Service::AttributeDescriptor::IconURL,                         _TXT("IconURL") },
+ENUM_CONVERSION_END(Bluetooth::SDPProfile::Service::AttributeDescriptor::id)
 
 namespace Bluetooth {
 
