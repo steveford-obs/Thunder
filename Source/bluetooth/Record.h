@@ -38,7 +38,7 @@ namespace Bluetooth {
         {
         }
         Record(const Record& buffer) = delete;
-        Record(const string& buffer)
+        explicit Record(const string& buffer)
             : _buffer(reinterpret_cast<uint8_t*>(const_cast<char *>(buffer.data())))
             , _bufferSize(buffer.size())
             , _filledSize(_bufferSize)
@@ -126,15 +126,20 @@ namespace Bluetooth {
             }
             return (val);
         }
+        void Export(string& output) const
+        {
+            output.assign(reinterpret_cast<const char*>(Data()), Length());
+        }
 
     public:
         void Push(const bool value)
         {
             Push(static_cast<uint8_t>(value));
         }
-        void Push(const string& value, const bool withNul = false)
+        void Push(const string& value)
         {
-            Push(value.data(), value.length() + (withNul? 1 : 0));
+            ASSERT(value.size() < 0x10000);
+            Push(reinterpret_cast<const uint8_t*>(value.data()), static_cast<uint16_t>(value.length()));
         }
         void Push(const uint8_t value[], const uint16_t size)
         {
@@ -206,7 +211,7 @@ namespace Bluetooth {
         }
         uint8_t* WritePtr()
         {
-            return (&_buffer[_readerOffset]);
+            return (&_buffer[_writerOffset]);
         }
 
     private:

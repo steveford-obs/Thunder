@@ -123,7 +123,7 @@ namespace Bluetooth {
             {
                 return (!_inUse);
             }
-            const std::map<uint8_t, ServiceCapabilities> Capabilities() const
+            const std::map<uint8_t, ServiceCapabilities>& Capabilities() const
             {
                 return (_capabilities);
             }
@@ -132,8 +132,8 @@ namespace Bluetooth {
             void CollectCapability(const uint8_t category, const string& value)
             {
                 _capabilities.emplace(std::piecewise_construct,
-                                    std::forward_as_tuple(category),
-                                    std::forward_as_tuple(category, value));
+                                      std::forward_as_tuple(category),
+                                      std::forward_as_tuple(category, value));
             }
 
         private:
@@ -179,7 +179,7 @@ namespace Bluetooth {
 
                     _seps.clear();
 
-                    cmd.Result().Discover([this](const string& sep) {
+                    cmd.Result().ReadDiscovery([this](const string& sep) {
                         _seps.emplace_back(sep);
                     });
 
@@ -210,7 +210,7 @@ namespace Bluetooth {
                     _socket->Execute(waitTime, _command, [&](const AVDTPSocket::Command& cmd) {
                         if ((cmd.Status() == Core::ERROR_NONE) && (cmd.Result().Status() == AVDTPSocket::Command::Message::SUCCESS)) {
 
-                            cmd.Result().GetCapabilities([this](const uint8_t category, const string& data) {
+                            cmd.Result().ReadCapabilities([this](const uint8_t category, const string& data) {
                                 (*_sepsIterator).CollectCapability(category, data);
                             });
 

@@ -33,6 +33,7 @@ namespace Exchange {
             UNASSIGNED,
             DISCONNECTED,
             IDLE,
+            CONFIGURED,
             OPEN,
             STREAMING
         };

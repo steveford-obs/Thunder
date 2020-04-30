@@ -118,7 +118,9 @@ namespace Bluetooth {
                     UNSUPPORTED_CONFIGURATION       = 0x29,
 
                     // Procedure errors
-                    BAD_STATE                       = 0x31
+                    BAD_STATE                       = 0x31,
+
+                    GENERAL_ERROR                   = 0xFF
                 };
 
             public:
@@ -209,15 +211,75 @@ namespace Bluetooth {
                     _message.Clear();
                     _message.Push(NewLabel(), Message::AVDTP_DISCOVER);
                 }
-                void GetCapabilities(const uint8_t seid)
+                void GetCapabilities(const uint8_t acpSeid)
                 {
-                    _message.Clear();
-                    _message.Push(NewLabel(), Message::AVDTP_GET_CAPABILITIES);
-                    _message.Push(static_cast<uint8_t>(seid << 2));
+                    GenericSignal(Message::AVDTP_GET_CAPABILITIES, acpSeid);
                 }
+                void GetAllCapabilities(const uint8_t acpSeid)
+                {
+                    GenericSignal(Message::AVDTP_GET_ALL_CAPABILITIES, acpSeid);
+                }
+                void GetConfiguration(const uint8_t acpSeid)
+                {
+                    GenericSignal(Message::AVDTP_GET_CONFIGURATION, acpSeid);
+                }
+                void SetConfiguration(const uint8_t acpSeid, const uint8_t intSeid, const std::map<uint8_t, string>& caps)
+                {
+                    ConfigurationSignal(Message::AVDTP_SET_CONFIGURATION, acpSeid, intSeid, caps);
+                    printf("set:%s\n", _message.ToString().c_str());
+                }
+                void Reconfigure(const uint8_t acpSeid, const uint8_t intSeid, const std::map<uint8_t, string>& caps)
+                {
+                    ConfigurationSignal(Message::AVDTP_RECONFIGURE, acpSeid, intSeid, caps);
+                }
+                void Open(const uint8_t acpSeid)
+                {
+                    GenericSignal(Message::AVDTP_OPEN, acpSeid);
+                }
+                void Start(const uint8_t acpSeid)
+                {
+                    GenericSignal(Message::AVDTP_START, acpSeid);
+                }
+                void Suspend(const uint8_t acpSeid)
+                {
+                    GenericSignal(Message::AVDTP_SUSPEND, acpSeid);
+                }
+                void Close(const uint8_t acpSeid)
+                {
+                    GenericSignal(Message::AVDTP_CLOSE, acpSeid);
+                }
+                void Abort(const uint8_t acpSeid)
+                {
+                    GenericSignal(Message::AVDTP_ABORT, acpSeid);
+                }
+                void SecurityControl(const uint8_t acpSeid, const string& data)
+                {
+                    GenericSignal(Message::AVDTP_SECURITY_CONTROL, acpSeid);
+                    _message.Push(data);
+                }
+
+            public:
                 uint8_t Label()
                 {
                     return (_label);
+                }
+
+            private:
+                void GenericSignal(const Message::signalidentifier signal, const uint8_t acpSeid)
+                {
+                    _message.Clear();
+                    _message.Push(NewLabel(), signal);
+                    _message.Push(static_cast<uint8_t>(acpSeid << 2));
+                }
+                void ConfigurationSignal(const Message::signalidentifier signal, const uint8_t acpSeid, const uint8_t intSeid, const std::map<uint8_t, string>& caps)
+                {
+                    GenericSignal(signal, acpSeid);
+                    _message.Push(static_cast<uint8_t>(intSeid << 2));
+                    for (auto const& c : caps) {
+                        _message.Push(c.first);
+                        _message.Push(static_cast<uint8_t>(c.second.size()));
+                        _message.Push(c.second);
+                    }
                 }
 
             private:
@@ -277,9 +339,17 @@ namespace Bluetooth {
                         if (msgType == Message::RESPONSE_ACCEPT) {
                             _status = Message::SUCCESS;
                             message.Pop(_payload, message.Available());
-                        } else {
-                            // Error
+                        } else if (msgType == Message::RESPONSE_REJECT) {
+                            if ((signalId == Message::AVDTP_SET_CONFIGURATION)
+                                    || (signalId == Message::AVDTP_RECONFIGURE)
+                                    || (signalId == Message::AVDTP_START)
+                                    || (signalId == Message::AVDTP_SUSPEND)) {
+                                uint8_t id{};
+                                message.Pop(id);
+                            }
                             message.Pop(_status);
+                        } else {
+                            _status = Message::GENERAL_ERROR;
                         }
 
                         _type = signalId;
@@ -300,7 +370,7 @@ namespace Bluetooth {
                 }
 
             public:
-                void Discover(const std::function<void(const string&)>& handler) const
+                void ReadDiscovery(const std::function<void(const string&)>& handler) const
                 {
                     // Split the payload into SEP sections and pass to the handler for deserialisation
                     ASSERT(Type() == Message::signalidentifier::AVDTP_DISCOVER);
@@ -310,11 +380,9 @@ namespace Bluetooth {
                         handler(sep);
                     }
                 }
-
-                void GetCapabilities(const std::function<void(const uint8_t /* category */, const string&)>& handler) const
+                void ReadCapabilities(const std::function<void(const uint8_t /* category */, const string&)>& handler) const
                 {
                     // Split the payload into capabilities sections and pass to the handler for deserialisation
-                    ASSERT(Type() == Message::signalidentifier::AVDTP_GET_CAPABILITIES);
                     while (_payload.Available() >= 2) {
                         uint8_t category{};
                         uint8_t length{};
@@ -353,11 +421,71 @@ namespace Bluetooth {
                 _status = ~0;
                 _request.Discover();
             }
-            void GetCapabilities(const uint8_t seid)
+            void GetCapabilities(const uint8_t acpSeid)
             {
                 _response.Clear();
                 _status = ~0;
-                _request.GetCapabilities(seid);
+                _request.GetCapabilities(acpSeid);
+            }
+            void GetAllCapabilities(const uint8_t acpSeid)
+            {
+                _response.Clear();
+                _status = ~0;
+                _request.GetAllCapabilities(acpSeid);
+            }
+            void GetConfiguration(const uint8_t acpSeid)
+            {
+                _response.Clear();
+                _status = ~0;
+                _request.GetConfiguration(acpSeid);
+            }
+            void SetConfiguration(const uint8_t acpSeid, const uint8_t intSeid, const std::map<uint8_t, string>& caps)
+            {
+                _response.Clear();
+                _status = ~0;
+                _request.SetConfiguration(acpSeid, intSeid, caps);
+            }
+            void Reconfigure(const uint8_t acpSeid, const uint8_t intSeid, const std::map<uint8_t, string>& caps)
+            {
+                _response.Clear();
+                _status = ~0;
+                _request.Reconfigure(acpSeid, intSeid, caps);
+            }
+            void Open(const uint8_t acpSeid)
+            {
+                _response.Clear();
+                _status = ~0;
+                _request.Open(acpSeid);
+            }
+            void Start(const uint8_t acpSeid)
+            {
+                _response.Clear();
+                _status = ~0;
+                _request.Start(acpSeid);
+            }
+            void Suspend(const uint8_t acpSeid)
+            {
+                _response.Clear();
+                _status = ~0;
+                _request.Suspend(acpSeid);
+            }
+            void Close(const uint8_t acpSeid)
+            {
+                _response.Clear();
+                _status = ~0;
+                _request.Close(acpSeid);
+            }
+            void Abort(const uint8_t acpSeid)
+            {
+                _response.Clear();
+                _status = ~0;
+                _request.Abort(acpSeid);
+            }
+            void SecurityControl(const uint8_t acpSeid, const string& data)
+            {
+                _response.Clear();
+                _status = ~0;
+                _request.SecurityControl(acpSeid, data);
             }
 
         public:
